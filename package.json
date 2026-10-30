@@ -1,0 +1,29 @@
+{
+  "name": "wayline-vpn",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "tauri": "tauri",
+    "test": "node --import tsx --test tests/links.test.ts",
+    "android:prepare": "bash scripts/prepare-android.sh"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "typescript": "5.8.3",
+    "react": "latest",
+    "react-dom": "latest",
+    "lucide-react": "^0.468.0",
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tsx": "^4.20.0"
+  }
+}

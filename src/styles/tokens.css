@@ -1,0 +1,3 @@
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;--bg:#0b1b2d;--surface:#142a40;--surface-2:#1b354e;--ink:#e5f3fc;--muted:#9bb2c5;--line:#35516a;--primary:#8bd5f5;--glow:#398fc0;--overlay:.72;--blur:16px;--font-scale:1;--r-sm:10px;--r-md:16px;--r-lg:22px;--r-xl:28px;--ease:cubic-bezier(.2,.8,.2,1);font-size:calc(14px * var(--font-scale));}
+:root[data-mode="light"]{color-scheme:light}
+*{box-sizing:border-box}button,input,select{font:inherit}button{color:inherit}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary);outline-offset:3px}::selection{background:var(--primary);color:var(--bg)}

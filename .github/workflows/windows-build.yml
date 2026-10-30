@@ -1,0 +1,29 @@
+name: Windows desktop build
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install npm packages
+        run: npm install --no-audit
+      - name: TypeScript and frontend
+        run: npm run build
+      - name: Parser tests
+        run: npm test
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Windows app
+        run: npm run tauri build -- --bundles nsis
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayline-windows-installer
+          path: src-tauri/target/release/bundle/nsis/*
+          if-no-files-found: error
