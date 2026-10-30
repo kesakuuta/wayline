@@ -1,0 +1,71 @@
+name: Android APK build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**'
+      - '!**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Build Android APK (arm64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android SDK and NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+
+      - name: Install frontend dependencies
+        run: npm install --no-audit
+
+      - name: Check frontend
+        run: npm run build
+
+      - name: Prepare a fresh Tauri Android project
+        run: |
+          rm -rf src-tauri/gen/android
+          cargo tauri android init
+          bash scripts/prepare-android.sh
+
+      - name: Build Android APK
+        run: cargo tauri android build --apk --target aarch64
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayline-android-arm64-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
