@@ -70,23 +70,34 @@ if 'com.github.singbox-android:libbox:1.14.0' not in s:
 p.write_text(s)
 PYGRADLE
 
-SETTINGS="src-tauri/gen/android/settings.gradle.kts"
+SETTINGS=""
+for candidate in src-tauri/gen/android/settings.gradle.kts src-tauri/gen/android/settings.gradle; do
+  if [ -f "$candidate" ]; then SETTINGS="$candidate"; break; fi
+done
+if [ -z "$SETTINGS" ]; then
+  echo "Could not find generated Android settings.gradle(.kts)." >&2
+  exit 1
+fi
 if ! grep -q 'jitpack.io' "$SETTINGS"; then
-  python3 - "$SETTINGS" <<'PY'
+  python3 - "$SETTINGS" <<'PYSETTINGS'
 from pathlib import Path
 import sys
-p = Path(sys.argv[1]); s = p.read_text()
-# JitPack repository is added to dependencyResolutionManagement if present, otherwise plugin repos remain untouched.
-needle = 'dependencyResolutionManagement {'
+p = Path(sys.argv[1])
+s = p.read_text()
+if p.suffix == ".kts":
+    repo = 'repositories { maven { url = uri("https://jitpack.io") } }'
+else:
+    repo = 'repositories { maven { url "https://jitpack.io" } }'
+needle = "dependencyResolutionManagement {"
 if needle in s:
     pos = s.find(needle)
-    brace = s.find('{', pos) + 1
-    s = s[:brace] + '\n    repositories { maven { url = uri("https://jitpack.io") } }\n' + s[brace:]
+    brace = s.find("{", pos) + 1
+    s = s[:brace] + "\\n    " + repo + "\\n" + s[brace:]
 else:
-    s += '\ndependencyResolutionManagement { repositories { maven { url = uri("https://jitpack.io") } } }\n'
+    s += "\\ndependencyResolutionManagement { " + repo + " }\\n"
 p.write_text(s)
-PY
+PYSETTINGS
 fi
 
 echo "Android source overlay synced into src-tauri/gen/android."
-echo "Next: inspect Gradle repository/dependency resolution, then build with your Android SDK/NDK."
+echo "Next: build with your Android SDK/NDK."
