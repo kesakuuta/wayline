@@ -35,3 +35,11 @@ test('sing-box JSON imports real outbounds only', () => {
 test('Unsupported protocol is not silently imported', () => {
   assert.throws(() => importConfigs('wireguard://xxx@example.com:1234'), /Нет импортированных узлов/);
 });
+
+
+test('Country flags are inferred from the server alias', () => {
+  const de = parseShareLink('vless://12345678-1234-1234-1234-123456789abc@edge.example.com:443#Germany%20Frankfurt');
+  const fi = parseShareLink('vless://12345678-1234-1234-1234-123456789abc@edge.example.com:443#Helsinki%20FI');
+  assert.equal(de.flag, '🇩🇪');
+  assert.equal(fi.flag, '🇫🇮');
+});
