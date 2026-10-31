@@ -3,7 +3,7 @@ import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronR
 import type { Appearance, AppearanceStyle, Mode, Server, Subscription, ThemeName } from './lib/types';
 import { defaultAppearance, loadAppearance, saveAppearance } from './lib/persist';
 import { importConfigs } from './lib/links';
-import { connect, disconnect, status, coreLog, fetchSubscription, isTauri, isAndroidNative, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
+import { connect, disconnect, status, coreLog, fetchSubscription, readClipboard, isTauri, isAndroidNative, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
 
 const initial:Subscription[]=[{id:'local',name:'Мои серверы',updated:'Добавьте конфигурацию',servers:[]}];
 const PROFILE_KEY = 'wayline.profiles.v2';
@@ -33,10 +33,12 @@ const palette:Record<ThemeName,{primary:string;bg:string;surface:string;surface2
 export default function App(){
  const [appearance,setAppearance]=useState<Appearance>(loadAppearance);
  const [subs,setSubs]=useState<Subscription[]>(loadProfiles); const [activeSub,setActiveSub]=useState(()=>localStorage.getItem('wayline.active.profile') || 'local'); const [selected,setSelected]=useState('');
- const [importText,setImportText]=useState(''); const [native,setNative]=useState<CoreStatus|null>(null); const [busy,setBusy]=useState(false); const [coreEngine,setCoreEngine]=useState<CoreEngine>(()=>(localStorage.getItem('wayline.core.engine')==='sing-box'?'sing-box':'xray')); const [coreMode,setCoreMode]=useState<CoreMode>(()=>localStorage.getItem('wayline.core.engine')==='sing-box'&&localStorage.getItem('wayline.core.mode')==='tun'?'tun':'proxy'); const [xrayBinary,setXrayBinary]=useState(()=>localStorage.getItem('wayline.core.xray') || (navigator.platform.toLowerCase().includes('win')?'xray.exe':'xray')); const [singBoxBinary,setSingBoxBinary]=useState(()=>localStorage.getItem('wayline.core.singbox') || (navigator.platform.toLowerCase().includes('win')?'sing-box.exe':'sing-box')); const coreBinary=coreEngine==='xray'?xrayBinary:singBoxBinary; const [logText,setLogText]=useState('');
- const [query,setQuery]=useState(''); const [settings,setSettings]=useState(false); const [settingsTab,setSettingsTab]=useState('Внешний вид'); const [notice,setNotice]=useState(''); const [tabMenu,setTabMenu]=useState<string|null>(null); const [leftWidth,setLeftWidth]=useState(50); const [resizing,setResizing]=useState(false); const [newName,setNewName]=useState(''); const [showAdd,setShowAdd]=useState(false); const fileRef=useRef<HTMLInputElement>(null);
+ const [importText,setImportText]=useState(''); const [native,setNative]=useState<CoreStatus|null>(null); const [busy,setBusy]=useState(false); const [coreEngine,setCoreEngine]=useState<CoreEngine>(()=>isAndroidNative()?'sing-box':(localStorage.getItem('wayline.core.engine')==='sing-box'?'sing-box':'xray')); const [coreMode,setCoreMode]=useState<CoreMode>(()=>isAndroidNative()?'tun':(localStorage.getItem('wayline.core.engine')==='sing-box'&&localStorage.getItem('wayline.core.mode')==='tun'?'tun':'proxy')); const [xrayBinary,setXrayBinary]=useState(()=>localStorage.getItem('wayline.core.xray') || (navigator.platform.toLowerCase().includes('win')?'xray.exe':'xray')); const [singBoxBinary,setSingBoxBinary]=useState(()=>localStorage.getItem('wayline.core.singbox') || (navigator.platform.toLowerCase().includes('win')?'sing-box.exe':'sing-box')); const coreBinary=coreEngine==='xray'?xrayBinary:singBoxBinary; const [logText,setLogText]=useState('');
+ const [query,setQuery]=useState(''); const [settings,setSettings]=useState(false); const [settingsTab,setSettingsTab]=useState('Внешний вид'); const [notice,setNotice]=useState(''); const [tabMenu,setTabMenu]=useState<string|null>(null); const [leftWidth,setLeftWidth]=useState(50); const [resizing,setResizing]=useState(false); const [newName,setNewName]=useState(''); const [showAdd,setShowAdd]=useState(false); const fileRef=useRef<HTMLInputElement>(null); const importTextRef=useRef<HTMLTextAreaElement>(null); const lastCoreError=useRef<string|null>(null);
  const sub=subs.find(s=>s.id===activeSub)??subs[0]; const server=sub?.servers.find(s=>s.id===selected)??sub?.servers[0];
  const connected=Boolean(native?.running);
+ const connecting=Boolean(native?.connecting);
+ const displayMode=native?.mode??coreMode;
  const verified=connected && native?.verification==='verified';
  const filtered=useMemo(()=>sub?.servers.filter(s=>(s.name+' '+s.region+' '+s.protocol).toLowerCase().includes(query.toLowerCase()))??[],[sub,query]);
  useEffect(()=>{if(!saveAppearance(appearance))setNotice('Недостаточно места в локальном хранилище: фон не будет сохранён после перезапуска.');const root=document.documentElement;root.dataset.mode=appearance.mode==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):appearance.mode;const c=palette[appearance.theme];const resolved=root.dataset.mode==='light'?{...c,...lightPalette[appearance.theme]}:c;Object.entries({'--bg':resolved.bg,'--surface':resolved.surface,'--surface-2':resolved.surface2,'--ink':resolved.ink,'--muted':resolved.muted,'--line':resolved.line,'--primary':appearance.accent||c.primary,'--glow':c.glow,'--overlay':`${appearance.overlay}%`,'--blur':`${appearance.blur}px`,'--font-scale':`${appearance.fontScale/100}`}).forEach(([k,v])=>root.style.setProperty(k,v));root.dataset.style=appearance.style;root.dataset.density=appearance.density;},[appearance]);
@@ -48,16 +50,30 @@ export default function App(){
  useEffect(()=>{if(!resizing)return;const move=(e:MouseEvent)=>{const pct=Math.max(34,Math.min(66,e.clientX/window.innerWidth*100));setLeftWidth(pct);};const up=()=>{setResizing(false);localStorage.setItem('wayline.leftWidth',String(leftWidth));};window.addEventListener('mousemove',move);window.addEventListener('mouseup',up);return()=>{window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up);};},[resizing,leftWidth]);
  const update=(patch:Partial<Appearance>)=>setAppearance(a=>({...a,...patch}));
  const message=(text:string)=>{setNotice(text);window.setTimeout(()=>setNotice(''),3500);};
+ useEffect(()=>{
+  if(native?.error && native.error!==lastCoreError.current) message(native.error);
+  lastCoreError.current=native?.error??null;
+ },[native?.error]);
+ const openImport=()=>{
+  setShowAdd(true);
+  void readClipboard().then(text=>{
+   if(text.trim()) setImportText(current=>current.trim()?current:text.trim());
+  });
+ };
  const addSubscription=async()=>{
   try {
    const link=importText.trim();
-   const sourceUrl=/^https?:\/\/\S+$/.test(link) ? link : undefined;
-   const body=sourceUrl?await fetchSubscription(sourceUrl):importText;
+   const sourceUrl=/^https?:\\/\\/\\S+$/.test(link) ? link : undefined;
+   const fetched=sourceUrl?await fetchSubscription(sourceUrl):{content:importText,title:null};
+   const body=fetched.content;
    const {servers,failed}=importConfigs(body);
-   const name=newName.trim()||`Импорт ${new Date().toLocaleDateString('ru-RU')}`;
+   const embeddedTitle=body.match(/(?:^|\\r?\\n)\\s*#?\\s*(?:profile-title|subscription-name|profile_name)\\s*[:=]\\s*(.+)/i)?.[1]?.trim();
+   const urlTitle=sourceUrl?new URL(sourceUrl).hostname.replace(/^www\\./i,''):null;
+   const automaticName=fetched.title?.trim()||embeddedTitle||urlTitle||(servers.length===1?servers[0].name:null);
+   const name=newName.trim()||automaticName||`Импорт ${new Date().toLocaleDateString('ru-RU')}`;
    const id=crypto.randomUUID();
    setSubs(s=>[...s,{id,name,updated:new Date().toLocaleString('ru-RU'),servers,sourceUrl}]);
-   setActiveSub(id);setSelected(servers[0].id);setNewName('');setImportText('');setShowAdd(false);
+   setActiveSub(id);setSelected(servers[0]?.id??'');setNewName('');setImportText('');setShowAdd(false);
    message(`Добавлено серверов: ${servers.length}${failed.length ? `, пропущено: ${failed.length} (${failed[0]})` : ''}`);
   } catch(e) { message(e instanceof Error?e.message:String(e)); }
  };
@@ -67,7 +83,7 @@ export default function App(){
   setBusy(true);
   try {
    const data=await fetchSubscription(sub.sourceUrl);
-   const {servers,failed}=importConfigs(data);
+   const {servers,failed}=importConfigs(data.content);
    const timestamp=new Date().toLocaleString('ru-RU');
    setSubs(list=>list.map(item=>item.id===sub.id?{...item,servers,updated:timestamp}:item));
    setSelected(servers[0]?.id||'');
@@ -78,15 +94,17 @@ export default function App(){
  const deleteSubscription=(id:string)=>{if(connected){message('Сначала отключите VPN.');return;}if(subs.length===1){message('Нельзя удалить последний профиль.');return;}const next=subs.filter(s=>s.id!==id);setSubs(next);if(activeSub===id){setActiveSub(next[0].id);setSelected(next[0].servers[0]?.id??'');}setTabMenu(null);};
  const chooseSub=(id:string)=>{if(connected){message('Сначала отключите VPN.');return;}setActiveSub(id);setSelected(subs.find(s=>s.id===id)?.servers[0]?.id??'');};
  const toggleConnection=async()=>{
-  if(busy)return;
+  if(busy||connecting)return;
   if(!isTauri()&&!isAndroidNative()) { message('Подключение работает только в нативной сборке, не в браузере.'); return; }
-  if(!connected && !server?.outbound) { message('Импортируйте реальный сервер: VLESS, HY2, Trojan, VMess, SS или JSON-outbound sing-box.'); setShowAdd(true); return; }
+  if(!connected && !server?.outbound) { message('Импортируйте реальный сервер: VLESS, HY2, Trojan, VMess, SS или JSON-outbound sing-box.'); openImport(); return; }
   setBusy(true);
   try {
-   const next=connected?await disconnect():await connect(server!.outbound!,isAndroidNative()?'tun':coreMode,isAndroidNative()?'sing-box':coreEngine,coreBinary);
+   const next=connected?await disconnect():await connect(server!.outbound!,coreMode,isAndroidNative()?'sing-box':coreEngine,coreBinary);
    setNative(next);
    if(next.error) message(next.error);
-   else if(!connected&&isAndroidNative()) message('Запрос на подключение отправлен. Подтвердите системное окно Android.');
+   else if(next.running) message('Подключение установлено.');
+   else if(next.connecting) message('Запускаю sing-box. Ожидаю результат от системного VPN-сервиса…');
+   else if(!connected) message('Ядро не подтвердило запуск. Откройте диагностику.');
   } catch(e) { message(e instanceof Error?e.message:String(e)); const next=await status().catch(()=>null);if(next)setNative(next); }
   finally {setBusy(false);}
  };
