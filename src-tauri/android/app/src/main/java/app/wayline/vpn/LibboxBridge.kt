@@ -23,7 +23,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     private var commandServer: Any? = null
     private var tunFd: Int? = null
     private var defaultInterfaceCallback: ConnectivityManager.NetworkCallback? = null
-    private var defaultInterfaceListener: Any? = null
+    private var networkCallbackThread: HandlerThread? = null
 
     @Synchronized
     fun start(configJson: String) {
@@ -238,28 +238,56 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     private fun startDefaultInterfaceMonitor(listener: Any) {
         closeDefaultInterfaceMonitor()
         val connectivity = service.getSystemService(ConnectivityManager::class.java) ?: return
-        defaultInterfaceListener = listener
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .build()
+        val thread = HandlerThread("Wayline-NetworkMonitor").apply { start() }
+        val handler = Handler(thread.looper)
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                if (isVpnNetwork(connectivity, network)) return
                 notifyDefaultInterface(listener, network)
             }
 
-            override fun onLost(network: Network) {
-                val current = connectivity.activeNetwork
-                notifyDefaultInterface(listener, current)
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                if (!networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    notifyDefaultInterface(listener, network)
+                }
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
-                notifyDefaultInterface(listener, network)
+                if (!isVpnNetwork(connectivity, network)) {
+                    notifyDefaultInterface(listener, network)
+                }
+            }
+
+            override fun onLost(network: Network) {
+                notifyDefaultInterface(listener, findUnderlyingNetwork(connectivity))
             }
         }
         try {
-            connectivity.registerDefaultNetworkCallback(callback)
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+                    connectivity.registerBestMatchingNetworkCallback(request, callback, handler)
+                }
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> {
+                    // requestNetwork selects the non-VPN network. registerDefaultNetworkCallback
+                    // can return the VPN itself on Android 9+ and create a routing loop.
+                    connectivity.requestNetwork(request, callback, handler)
+                }
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+                    connectivity.registerDefaultNetworkCallback(callback, handler)
+                }
+                else -> connectivity.registerDefaultNetworkCallback(callback)
+            }
             defaultInterfaceCallback = callback
-            notifyDefaultInterface(listener, connectivity.activeNetwork)
+            networkCallbackThread = thread
+            notifyDefaultInterface(listener, findUnderlyingNetwork(connectivity))
         } catch (error: Throwable) {
-            defaultInterfaceListener = null
-            Log.e("WaylineLibbox", "Не удалось отслеживать активную сеть", error)
+            thread.quitSafely()
+            Log.e("WaylineLibbox", "Не удалось отслеживать физическую сеть", error)
+            notifyDefaultInterface(listener, findUnderlyingNetwork(connectivity))
         }
     }
 
@@ -270,12 +298,27 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             runCatching { connectivity.unregisterNetworkCallback(callback) }
         }
         defaultInterfaceCallback = null
-        defaultInterfaceListener = null
+        networkCallbackThread?.quitSafely()
+        networkCallbackThread = null
+    }
+
+    private fun isVpnNetwork(connectivity: ConnectivityManager, network: Network): Boolean =
+        connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+
+    private fun findUnderlyingNetwork(connectivity: ConnectivityManager): Network? {
+        val networks = connectivity.allNetworks
+        return networks.firstOrNull { network ->
+            val capabilities = connectivity.getNetworkCapabilities(network) ?: return@firstOrNull false
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        }
     }
 
     private fun notifyDefaultInterface(listener: Any, network: Network?) {
         val connectivity = service.getSystemService(ConnectivityManager::class.java) ?: return
-        val link = network?.let { connectivity.getLinkProperties(it) }
+        val physicalNetwork = network?.takeUnless { isVpnNetwork(connectivity, it) }
+            ?: findUnderlyingNetwork(connectivity)
+        val link = physicalNetwork?.let { connectivity.getLinkProperties(it) }
         val name = link?.interfaceName.orEmpty()
         val index = runCatching { NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
         runCatching {
