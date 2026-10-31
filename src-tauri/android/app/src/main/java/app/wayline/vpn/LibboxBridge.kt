@@ -221,12 +221,17 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                 setProperty(item, "name", networkInterface.name)
                 setProperty(item, "index", networkInterface.index)
                 setProperty(item, "mtu", networkInterface.mtu)
-                setProperty(item, "flags", 0)
+                val flags = (if (networkInterface.isUp) 1 or 64 else 0) or
+                    (if (networkInterface.isLoopback) 8 else 0) or
+                    (if (networkInterface.isPointToPoint) 16 else 0) or
+                    (if (networkInterface.supportsMulticast()) 4096 else 0)
+                setProperty(item, "flags", flags)
+                val libbox = load("Libbox", loader)
                 val interfaceType = when {
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> 2
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> 3
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> 4
-                    else -> 0
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> libboxConstant(libbox, "InterfaceTypeWIFI")
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> libboxConstant(libbox, "InterfaceTypeCellular")
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> libboxConstant(libbox, "InterfaceTypeEthernet")
+                    else -> libboxConstant(libbox, "InterfaceTypeOther")
                 }
                 setProperty(item, "type", interfaceType)
                 setProperty(item, "metered", physicalCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true)
@@ -382,6 +387,9 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         val setter = target.javaClass.methods.firstOrNull { it.name.equals(setterName, true) && it.parameterTypes.size == 1 } ?: return
         invoke(setter, target, value)
     }
+
+    private fun libboxConstant(libbox: Class<*>, name: String): Int =
+        runCatching { libbox.getField(name).getInt(null) }.getOrDefault(0)
 
     private fun load(name: String, loader: ClassLoader): Class<*> = Class.forName(boxPackage + name, true, loader)
 
