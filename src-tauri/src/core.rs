@@ -314,8 +314,11 @@ fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Optio
         // startup validate the generated config and verify its SOCKS listener.
         return Ok((None, false));
     }
-    if let Some((output, legacy_cli)) = first_syntax_error {
-        return Ok((Some(output), legacy_cli));
+    if first_syntax_error.is_some() {
+        // Do not fail the connection on a CLI usage mismatch in the optional
+        // -test preflight. Start Xray with the canonical "run -config" form;
+        // its real startup output and the SOCKS probe remain authoritative.
+        return Ok((None, false));
     }
     Ok((None, false))
 }
