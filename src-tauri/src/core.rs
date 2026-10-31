@@ -291,10 +291,17 @@ fn verify_socks(port: u16) -> Result<(), String> {
     Ok(())
 }
 
-/// Explicit HTTPS-only subscription import. No redirects, TLS verification enabled,
-/// 2 MiB response cap. The URL may carry a provider token: never log it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionFetch {
+    content: String,
+    title: Option<String>,
+}
+
+/// HTTPS subscription import with TLS verification and a strict response size cap.
+/// Provider tokens are never logged or returned in diagnostics.
 #[tauri::command]
-pub fn fetch_subscription(url: String) -> Result<String, String> {
+pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
     use std::net::IpAddr;
     let parsed = reqwest::Url::parse(&url).map_err(|_| "Некорректный URL подписки".to_string())?;
     if parsed.scheme() != "https" { return Err("Подписка должна использовать HTTPS".into()); }
@@ -317,10 +324,22 @@ pub fn fetch_subscription(url: String) -> Result<String, String> {
         .error_for_status().map_err(|e| format!("Ответ сервера подписки: {e}"))?;
     const MAX_SIZE: usize = 2_000_000;
     if response.content_length().unwrap_or(0) > MAX_SIZE as u64 { return Err("Подписка превышает 2 МБ".into()); }
+    let title = response.headers().get("profile-title")
+        .or_else(|| response.headers().get("x-profile-title"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| response.headers().get(reqwest::header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split("filename=").nth(1))
+            .map(|value| value.trim_matches('"').trim_matches(';').trim().to_string())
+            .filter(|value| !value.is_empty()));
     let mut bytes = Vec::new();
     response.take((MAX_SIZE + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_SIZE { return Err("Подписка превышает 2 МБ".into()); }
-    String::from_utf8(bytes).map_err(|_| "Ответ подписки не UTF-8".into())
+    let content = String::from_utf8(bytes).map_err(|_| "Ответ подписки не UTF-8".to_string())?;
+    Ok(SubscriptionFetch { content, title })
 }
 
 #[tauri::command]
