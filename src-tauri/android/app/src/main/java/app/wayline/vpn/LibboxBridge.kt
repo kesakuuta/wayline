@@ -3,10 +3,15 @@ package app.wayline.vpn
 import android.net.ConnectivityManager
 import android.net.IpPrefix
 import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.util.Log
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.net.InetAddress
@@ -412,7 +417,13 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     }
 
     private fun call(target: Any, name: String): Any? {
-        val method = target.javaClass.methods.firstOrNull { it.name.equals(name, true) && it.parameterTypes.isEmpty() } ?: return null
+        val property = name.removePrefix("get").replaceFirstChar { it.lowercase() }
+        val getter = "get" + property.replaceFirstChar { it.uppercase() }
+        val booleanGetter = "is" + property.replaceFirstChar { it.uppercase() }
+        val method = target.javaClass.methods.firstOrNull {
+            it.parameterTypes.isEmpty() &&
+                (it.name.equals(name, true) || it.name.equals(getter, true) || it.name.equals(booleanGetter, true))
+        } ?: return null
         return invoke(method, target)
     }
 
