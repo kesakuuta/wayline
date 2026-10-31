@@ -158,3 +158,22 @@
     place-items: center;
   }
 }
+
+
+/* Android shell behaviour: no browser text selection or copy callouts on ordinary UI. */
+html, body, body *, body *::before, body *::after {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+input, textarea, select, [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+.tab-more {
+  display: grid !important;
+  place-items: center;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}

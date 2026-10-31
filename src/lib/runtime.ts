@@ -8,6 +8,8 @@ export type CoreStatus = {
   mode: CoreMode | null;
   port: number | null;
   uptimeSeconds: number | null;
+  rxBytes?: number | null;
+  txBytes?: number | null;
   verification: 'checking' | 'verified' | 'unverified' | null;
   engine: CoreEngine | null;
   error: string | null;
@@ -19,6 +21,7 @@ declare global {
       disconnect(): string;
       status(): string;
       readClipboard(): string;
+      fetchSubscription(url: string): string;
     };
   }
 }
@@ -49,11 +52,10 @@ export async function connect(
       ? [{
           type: 'tun',
           tag: 'tun-in',
-          interface_name: 'wayline-tun',
-          address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
-          mtu: 9000,
+          inet4_address: ['172.19.0.1/30'],
+          inet6_address: ['fdfe:dcba:9876::1/126'],
+          mtu: 1500,
           auto_route: true,
-          strict_route: false,
           stack: 'system',
           sniff: true
         }]
@@ -103,6 +105,14 @@ export async function disconnect(): Promise<CoreStatus> {
   return invoke<CoreStatus>('core_disconnect');
 }
 export async function fetchSubscription(url: string): Promise<SubscriptionFetch> {
+  if (isAndroidNative()) {
+    const raw = window.WaylineAndroid?.fetchSubscription(url);
+    if (!raw) throw new Error('Android не вернул содержимое подписки.');
+    const result = JSON.parse(raw) as { content?: string; title?: string | null; error?: string };
+    if (result.error) throw new Error(result.error);
+    if (typeof result.content !== 'string') throw new Error('Ответ подписки пуст или повреждён.');
+    return { content: result.content, title: result.title ?? null };
+  }
   requireDesktop();
   return invoke<SubscriptionFetch>('fetch_subscription', { url });
 }

@@ -164,8 +164,11 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         if (mtu != null && mtu.toInt() > 0) builder.setMtu(mtu.toInt())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
-        addAddressList(builder, options, "getInet4Address")
-        addAddressList(builder, options, "getInet6Address")
+        val ipv4AddressCount = addAddressList(builder, options, "getInet4Address")
+        val ipv6AddressCount = addAddressList(builder, options, "getInet6Address")
+        if (ipv4AddressCount + ipv6AddressCount == 0) {
+            throw IllegalStateException("sing-box не передал адреса для Android VPN-интерфейса")
+        }
 
         val autoRoute = call(options, "getAutoRoute") as? Boolean ?: true
         if (autoRoute) {
@@ -174,21 +177,19 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     builder.addDnsServer(address)
                 }
             }
+            val ipv4RouteCount: Int
+            val ipv6RouteCount: Int
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val route4 = call(options, "getInet4RouteAddress")
-                if (hasNext(route4)) addRouteList(builder, options, "getInet4RouteAddress")
-                else if (hasNext(call(options, "getInet4Address"))) builder.addRoute("0.0.0.0", 0)
-
-                val route6 = call(options, "getInet6RouteAddress")
-                if (hasNext(route6)) addRouteList(builder, options, "getInet6RouteAddress")
-                else if (hasNext(call(options, "getInet6Address"))) builder.addRoute("::", 0)
-
+                ipv4RouteCount = addRouteList(builder, options, "getInet4RouteAddress")
+                ipv6RouteCount = addRouteList(builder, options, "getInet6RouteAddress")
                 addExcludeRouteList(builder, options, "getInet4RouteExcludeAddress")
                 addExcludeRouteList(builder, options, "getInet6RouteExcludeAddress")
             } else {
-                addRouteList(builder, options, "getInet4RouteRange")
-                addRouteList(builder, options, "getInet6RouteRange")
+                ipv4RouteCount = addRouteList(builder, options, "getInet4RouteRange")
+                ipv6RouteCount = addRouteList(builder, options, "getInet6RouteRange")
             }
+            if (ipv4AddressCount > 0 && ipv4RouteCount == 0) builder.addRoute("0.0.0.0", 0)
+            if (ipv6AddressCount > 0 && ipv6RouteCount == 0) builder.addRoute("::", 0)
             consume(call(options, "getIncludePackage")) { packageName ->
                 builder.addAllowedApplication(packageName)
             }
@@ -216,20 +217,26 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         return disabled != null && value == disabled
     }
 
-    private fun addAddressList(builder: VpnService.Builder, options: Any, getter: String) {
+    private fun addAddressList(builder: VpnService.Builder, options: Any, getter: String): Int {
+        var added = 0
         consumeObjects(call(options, getter)) { prefix ->
             val address = call(prefix, "address") as? String ?: return@consumeObjects
             val length = (call(prefix, "prefix") as? Number)?.toInt() ?: return@consumeObjects
             builder.addAddress(address, length)
+            added++
         }
+        return added
     }
 
-    private fun addRouteList(builder: VpnService.Builder, options: Any, getter: String) {
+    private fun addRouteList(builder: VpnService.Builder, options: Any, getter: String): Int {
+        var added = 0
         consumeObjects(call(options, getter)) { prefix ->
             val address = call(prefix, "address") as? String ?: return@consumeObjects
             val length = (call(prefix, "prefix") as? Number)?.toInt() ?: return@consumeObjects
             builder.addRoute(address, length)
+            added++
         }
+        return added
     }
 
     private fun addExcludeRouteList(builder: VpnService.Builder, options: Any, getter: String) {

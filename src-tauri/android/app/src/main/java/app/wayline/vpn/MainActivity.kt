@@ -4,11 +4,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.VpnService
+import android.net.TrafficStats
 import android.os.Build
+import android.os.Process
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.result.contract.ActivityResultContracts
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
 
 class MainActivity : TauriActivity() {
     private var pendingConfig: String? = null
@@ -26,6 +31,11 @@ class MainActivity : TauriActivity() {
     override fun onWebViewCreate(webView: WebView) {
         super.onWebViewCreate(webView)
         webView.addJavascriptInterface(WaylineJsBridge(), "WaylineAndroid")
+        // Disable browser-like long-press selection and copy menus in the Android shell.
+        webView.setOnLongClickListener { true }
+        webView.isHapticFeedbackEnabled = false
+        webView.setOnCreateContextMenuListener { _, _, _ -> }
+        webView.evaluateJavascript("(function(){document.addEventListener('contextmenu',function(e){e.preventDefault();},true);document.addEventListener('selectstart',function(e){if(!e.target.closest('input,textarea,select,[contenteditable=true]'))e.preventDefault();},true);})();", null)
     }
 
     private fun startVpn(config: String?, mode: String) {
@@ -98,6 +108,8 @@ class MainActivity : TauriActivity() {
                 .put("mode", mode ?: JSONObject.NULL)
                 .put("port", if (running && mode == WaylineVpnService.MODE_PROXY) 2080 else JSONObject.NULL)
                 .put("uptimeSeconds", if (running && started > 0) ((System.currentTimeMillis() - started) / 1000) else 0)
+                .put("rxBytes", sessionTraffic(prefs.getLong(WaylineVpnService.KEY_RX_START, -1L), TrafficStats.getUidRxBytes(Process.myUid()), running))
+                .put("txBytes", sessionTraffic(prefs.getLong(WaylineVpnService.KEY_TX_START, -1L), TrafficStats.getUidTxBytes(Process.myUid()), running))
                 .put("verification", if (running) "unverified" else JSONObject.NULL)
                 .put("engine", if (running || connecting) "sing-box" else JSONObject.NULL)
                 .put("error", prefs.getString(WaylineVpnService.KEY_ERROR, null) ?: JSONObject.NULL)
@@ -106,10 +118,62 @@ class MainActivity : TauriActivity() {
 
         @JavascriptInterface
         fun readClipboard(): String {
-            val clipboard = getSystemService(ClipboardManager::class.java) ?: return ""
-            val clip: ClipData = clipboard.primaryClip ?: return ""
-            if (clip.itemCount == 0) return ""
-            return clip.getItemAt(0).coerceToText(this@MainActivity)?.toString().orEmpty()
+            return runCatching {
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                val clip: ClipData? = clipboard?.primaryClip
+                if (clip == null || clip.itemCount == 0) "" else {
+                    clip.getItemAt(0).coerceToText(this@MainActivity)?.toString().orEmpty().take(2_000_000)
+                }
+            }.getOrDefault("")
+        }
+
+        @JavascriptInterface
+        fun fetchSubscription(rawUrl: String): String {
+            var connection: HttpsURLConnection? = null
+            return try {
+                val url = URL(rawUrl)
+                val host = url.host.lowercase()
+                require(url.protocol.equals("https", true)) { "Подписка должна использовать HTTPS" }
+                require(host != "localhost" && !host.endsWith(".localhost") && !host.endsWith(".local")) { "Локальные адреса подписок запрещены" }
+                connection = (url.openConnection() as HttpsURLConnection).apply {
+                    connectTimeout = 12_000
+                    readTimeout = 12_000
+                    instanceFollowRedirects = false
+                    useCaches = false
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Wayline/0.2.0 Android")
+                }
+                val code = connection.responseCode
+                require(code in 200..299) { "Сервер подписки ответил HTTP $code" }
+                require(connection.contentLength <= 2_000_000) { "Подписка превышает 2 МБ" }
+                val output = ByteArrayOutputStream()
+                connection.inputStream.use { input ->
+                    val buffer = ByteArray(8192)
+                    var total = 0
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        require(total <= 2_000_000) { "Подписка превышает 2 МБ" }
+                        output.write(buffer, 0, read)
+                    }
+                }
+                val content = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(output.toByteArray())).toString()
+                val disposition = connection.getHeaderField("Content-Disposition").orEmpty()
+                val filename = Regex("(?i)filename\\s*=\\s*\\\"?([^\\\";]+)").find(disposition)?.groupValues?.getOrNull(1)
+                val title = connection.getHeaderField("profile-title") ?: connection.getHeaderField("x-profile-title") ?: filename
+                JSONObject().put("content", content).put("title", title?.takeIf { it.isNotBlank() } ?: JSONObject.NULL).toString()
+            } catch (error: Throwable) {
+                val message = error.message?.takeIf { it.startsWith("Подписка") || it.startsWith("Сервер") || it.startsWith("Локальные") }
+                JSONObject().put("error", message ?: "Не удалось загрузить подписку (${error.javaClass.simpleName})").toString()
+            } finally {
+                connection?.disconnect()
+            }
+        }
+
+        private fun sessionTraffic(start: Long, current: Long, running: Boolean): Any {
+            if (!running || start < 0 || current < 0) return JSONObject.NULL
+            return (current - start).coerceAtLeast(0L)
         }
     }
 }

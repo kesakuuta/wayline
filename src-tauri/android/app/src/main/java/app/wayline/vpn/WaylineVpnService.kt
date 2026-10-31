@@ -6,8 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
+import android.net.TrafficStats
 import android.os.Build
 import android.os.IBinder
+import android.os.Process
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.Executors
 
@@ -109,6 +111,8 @@ class WaylineVpnService : VpnService() {
             .putString(KEY_ERROR, error)
             .putString(KEY_MODE, mode)
             .putLong(KEY_STARTED, if (running) startedAt else 0L)
+            .putLong(KEY_RX_START, if (running) TrafficStats.getUidRxBytes(Process.myUid()) else -1L)
+            .putLong(KEY_TX_START, if (running) TrafficStats.getUidTxBytes(Process.myUid()) else -1L)
             .apply()
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
     }
@@ -172,6 +176,8 @@ class WaylineVpnService : VpnService() {
         const val KEY_CONNECTING = "connecting"
         const val KEY_ERROR = "error"
         const val KEY_STARTED = "started_at"
+        const val KEY_RX_START = "rx_start"
+        const val KEY_TX_START = "tx_start"
         const val KEY_MODE = "mode"
         private const val CHANNEL_ID = "wayline_vpn_status"
         private const val NOTIFICATION_ID = 4101
