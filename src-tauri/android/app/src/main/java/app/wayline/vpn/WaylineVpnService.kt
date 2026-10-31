@@ -14,6 +14,7 @@ import java.util.concurrent.Executors
 class WaylineVpnService : VpnService() {
     @Volatile private var engine: LibboxBridge? = null
     @Volatile private var startedAt = 0L
+    @Volatile private var currentMode = MODE_TUN
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "Wayline-Libbox").apply { isDaemon = true }
     }
@@ -29,6 +30,7 @@ class WaylineVpnService : VpnService() {
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_TUN
+                currentMode = mode
                 startForeground(NOTIFICATION_ID, buildNotification("Запуск sing-box…"))
                 saveStatus(running = false, connecting = true, error = null, mode = mode)
                 worker.execute {
@@ -67,7 +69,7 @@ class WaylineVpnService : VpnService() {
         runCatching { engine?.stop() }
         engine = null
         startedAt = 0L
-        saveStatus(running = false, connecting = false, error = null, mode = MODE_TUN)
+        saveStatus(running = false, connecting = false, error = null, mode = currentMode)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -75,7 +77,15 @@ class WaylineVpnService : VpnService() {
     internal fun onCoreStopped() {
         engine = null
         startedAt = 0L
-        saveStatus(running = false, connecting = false, error = "sing-box остановлен", mode = MODE_TUN)
+        saveStatus(running = false, connecting = false, error = "sing-box остановлен", mode = currentMode)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    internal fun onCoreError(message: String) {
+        engine = null
+        startedAt = 0L
+        saveStatus(running = false, connecting = false, error = message, mode = currentMode)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
