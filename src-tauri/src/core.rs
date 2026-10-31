@@ -128,8 +128,10 @@ fn binary_path(path: &str, engine: &str, app: &AppHandle) -> Result<PathBuf, Str
     // Resolve the normal UI defaults to the copy packaged inside the application.
     // A custom path remains user-controlled.
     if requested.is_empty() || requested == default_name {
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            let bundled = resource_dir.join("binaries").join(default_name);
+        if let Ok(bundled) = app.path().resolve(
+            format!("binaries/{default_name}"),
+            tauri::path::BaseDirectory::Resource,
+        ) {
             if bundled.is_file() {
                 return Ok(bundled);
             }
