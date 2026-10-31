@@ -4,6 +4,7 @@ import android.net.ConnectivityManager
 import android.net.IpPrefix
 import android.net.Network
 import android.net.VpnService
+import android.util.Log
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import java.lang.reflect.InvocationTargetException
@@ -22,6 +23,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     private var commandServer: Any? = null
     private var tunFd: Int? = null
     private var defaultInterfaceCallback: ConnectivityManager.NetworkCallback? = null
+    private var defaultInterfaceListener: Any? = null
 
     @Synchronized
     fun start(configJson: String) {
@@ -61,11 +63,14 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                 "useprocfs", "undernetworkextension", "includeallnetworks" -> false
                 "getinterfaces" -> networkInterfaces(loader)
                 "startdefaultinterfacemonitor" -> {
-                    args?.getOrNull(0)?.let { notifyDefaultInterface(it) }
+                    args?.getOrNull(0)?.let { startDefaultInterfaceMonitor(it) }
                     null
                 }
-                "closedefaultinterfacemonitor", "cleardnscache", "registermyinterface",
-                "startneighbormonitor", "closeneighbormonitor" -> null
+                "closedefaultinterfacemonitor" -> {
+                    closeDefaultInterfaceMonitor()
+                    null
+                }
+                "cleardnscache", "registermyinterface", "startneighbormonitor", "closeneighbormonitor" -> null
                 "findconnectionowner", "localdnstransport", "readwifistate" -> null
                 "systemcertificates" -> iteratorProxy(loader, "StringIterator", emptyList())
                 "sendnotification" -> null
@@ -86,8 +91,16 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     }
                 }
                 "servicestop" -> { service.onCoreStopped(); null }
-                "servicereload", "setsystemproxyenabled", "triggernativecrash",
-                "writedebugmessage", "connectsshagent", "writemessage", "seterror" -> null
+                "seterror" -> {
+                    val message = args?.firstOrNull()?.toString()?.takeIf { it.isNotBlank() } ?: "Неизвестная ошибка Libbox"
+                    service.onCoreError(message)
+                    null
+                }
+                "writedebugmessage", "writemessage" -> {
+                    Log.i("WaylineLibbox", args?.firstOrNull()?.toString().orEmpty())
+                    null
+                }
+                "servicereload", "setsystemproxyenabled", "triggernativecrash", "connectsshagent" -> null
                 else -> defaultValue(method.returnType)
             }
         }
@@ -222,9 +235,46 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         return iteratorProxy(loader, "NetworkInterfaceIterator", values)
     }
 
-    private fun notifyDefaultInterface(listener: Any) {
+    private fun startDefaultInterfaceMonitor(listener: Any) {
+        closeDefaultInterfaceMonitor()
         val connectivity = service.getSystemService(ConnectivityManager::class.java) ?: return
-        val network: Network? = connectivity.activeNetwork
+        defaultInterfaceListener = listener
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                notifyDefaultInterface(listener, network)
+            }
+
+            override fun onLost(network: Network) {
+                val current = connectivity.activeNetwork
+                notifyDefaultInterface(listener, current)
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
+                notifyDefaultInterface(listener, network)
+            }
+        }
+        try {
+            connectivity.registerDefaultNetworkCallback(callback)
+            defaultInterfaceCallback = callback
+            notifyDefaultInterface(listener, connectivity.activeNetwork)
+        } catch (error: Throwable) {
+            defaultInterfaceListener = null
+            Log.e("WaylineLibbox", "Не удалось отслеживать активную сеть", error)
+        }
+    }
+
+    private fun closeDefaultInterfaceMonitor() {
+        val connectivity = service.getSystemService(ConnectivityManager::class.java)
+        val callback = defaultInterfaceCallback
+        if (connectivity != null && callback != null) {
+            runCatching { connectivity.unregisterNetworkCallback(callback) }
+        }
+        defaultInterfaceCallback = null
+        defaultInterfaceListener = null
+    }
+
+    private fun notifyDefaultInterface(listener: Any, network: Network?) {
+        val connectivity = service.getSystemService(ConnectivityManager::class.java) ?: return
         val link = network?.let { connectivity.getLinkProperties(it) }
         val name = link?.interfaceName.orEmpty()
         val index = runCatching { NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
@@ -232,7 +282,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             listener.javaClass.methods.firstOrNull {
                 it.name.equals("updateDefaultInterface", true) && it.parameterTypes.size == 4
             }?.invoke(listener, name, index, false, false)
-        }
+        }.onFailure { Log.w("WaylineLibbox", "Не удалось обновить default interface", it) }
     }
 
     private fun iteratorProxy(loader: ClassLoader, interfaceName: String, items: List<Any>): Any {
@@ -299,7 +349,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             runCatching { server.javaClass.methods.first { it.name.equals("close", true) && it.parameterTypes.isEmpty() }.invoke(server) }
         }
         commandServer = null
-        defaultInterfaceCallback = null
+        closeDefaultInterfaceMonitor()
         closeTun()
     }
 
