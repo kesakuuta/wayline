@@ -68,7 +68,7 @@ export async function connect(
     const config = {
       log: { level: 'info', timestamp: true },
       dns: {
-        servers: [{ tag: 'dns-remote', address: '1.1.1.1', detour: 'proxy' }],
+        servers: [{ type: 'udp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }],
         final: 'dns-remote',
         strategy: 'prefer_ipv4'
       },
