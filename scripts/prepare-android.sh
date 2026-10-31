@@ -59,7 +59,7 @@ p = Path(sys.argv[1]); s = p.read_text()
 # The generated app module declares its own repositories, which override settings repositories.
 # Add JitPack directly to this project so the libbox artifact can resolve.
 if 'jitpack.io' not in s:
-    s = 'repositories { maven { url = uri("https://jitpack.io") } }\\n' + s
+    s = 'repositories { maven { url = uri("https://jitpack.io") } }\n' + s
 if re.search(r'minSdk\s*=\s*\d+', s):
     s = re.sub(r'minSdk\s*=\s*\d+', 'minSdk = 24', s, count=1)
 elif re.search(r'minSdkVersion\(\d+\)', s):
