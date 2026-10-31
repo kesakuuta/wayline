@@ -40,11 +40,12 @@ class WaylineVpnService : VpnService() {
                         if (mode == MODE_TUN && VpnService.prepare(this) != null) {
                             throw IllegalStateException("Android не выдал разрешение VPN")
                         }
-                        bridge = LibboxBridge(this)
-                        engine = bridge
-                        bridge.start(config)
+                        val activeBridge = LibboxBridge(this)
+                        bridge = activeBridge
+                        engine = activeBridge
+                        activeBridge.start(config)
                         val storedError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
-                        if (engine !== bridge || !storedError.isNullOrBlank()) {
+                        if (engine !== activeBridge || !storedError.isNullOrBlank()) {
                             throw IllegalStateException(storedError ?: "sing-box остановился во время запуска")
                         }
                         startedAt = System.currentTimeMillis()
