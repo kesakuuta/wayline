@@ -180,7 +180,7 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
     let tls = outbound.get("tls").cloned().unwrap_or(json!({}));
     let tls_enabled = tls.get("enabled").and_then(Value::as_bool).unwrap_or(false);
     let server_name = tls.get("server_name").and_then(Value::as_str).unwrap_or(server);
-    let mut stream = json!({"method":"raw","security":"none"});
+    let mut stream = json!({"network":"raw","security":"none"});
     if tls_enabled {
         let reality = tls.get("reality").filter(|v| v.get("enabled").and_then(Value::as_bool)==Some(true));
         if let Some(r) = reality {
@@ -188,7 +188,7 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
             stream["realitySettings"] = json!({
                 "serverName":server_name,
                 "fingerprint":tls.get("utls").and_then(|v|v.get("fingerprint")).and_then(Value::as_str).unwrap_or("chrome"),
-                "password":r.get("public_key").and_then(Value::as_str).unwrap_or(""),
+                "publicKey":r.get("public_key").and_then(Value::as_str).unwrap_or(""),
                 "shortId":r.get("short_id").and_then(Value::as_str).unwrap_or(""),
                 "spiderX":r.get("spider_x").and_then(Value::as_str).unwrap_or("/")
             });
@@ -205,11 +205,11 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
         match transport.get("type").and_then(Value::as_str).unwrap_or("tcp") {
             "ws" => {
                 if stream["security"] == "reality" { return Err("Xray REALITY несовместим с WebSocket. Используйте RAW/TCP или gRPC.".into()); }
-                stream["method"] = json!("websocket");
+                stream["network"] = json!("ws");
                 stream["wsSettings"] = json!({"path":transport.get("path").and_then(Value::as_str).unwrap_or("/"),"headers":transport.get("headers").cloned().unwrap_or(json!({}))});
             },
             "grpc" => {
-                stream["method"] = json!("grpc");
+                stream["network"] = json!("grpc");
                 stream["grpcSettings"] = json!({"serviceName":transport.get("service_name").and_then(Value::as_str).unwrap_or("")});
             },
             "tcp" => {},
@@ -234,6 +234,27 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
         "outbounds":[proxy,{"protocol":"freedom","tag":"direct"}],
         "routing":{"domainStrategy":"AsIs","rules":[]}
     }))
+}
+
+fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<std::process::Output> {
+    let modern = Command::new(binary)
+        .arg("run").arg("-test").arg("-config").arg(config).output()?;
+    if modern.status.success() {
+        return Ok(modern);
+    }
+    let modern_error = format!("{} {}", String::from_utf8_lossy(&modern.stdout), String::from_utf8_lossy(&modern.stderr));
+    // Older Xray builds expose the test flag at the root command instead of under run.
+    // Retry only for the explicit unknown-flag error; don't hide real config failures.
+    if modern_error.contains("flag provided but not defined") && modern_error.contains("-test") {
+        let mut legacy = Command::new(binary).arg("-test").arg("-config").arg(config).output()?;
+        if legacy.status.success() {
+            return Ok(legacy);
+        }
+        let legacy_error = format!("{} {}", String::from_utf8_lossy(&legacy.stdout), String::from_utf8_lossy(&legacy.stderr));
+        legacy.stderr = format!("Modern Xray invocation: {modern_error}\nLegacy Xray invocation: {legacy_error}").into_bytes();
+        return Ok(legacy);
+    }
+    Ok(modern)
 }
 
 fn write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -342,7 +363,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     write_private(&config_path, &serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?)?;
 
     let checked = if engine == "xray" {
-        Command::new(&binary).arg("run").arg("-test").arg("-config").arg(&config_path).output()
+        run_xray_config_check(&binary, &config_path)
     } else {
         Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
     };
@@ -409,8 +430,8 @@ mod tests {
         let cfg = create_xray_config(outbound, 2080).unwrap();
         assert_eq!(cfg["outbounds"][0]["protocol"], "vless");
         assert_eq!(cfg["outbounds"][0]["streamSettings"]["security"], "reality");
-        assert_eq!(cfg["outbounds"][0]["streamSettings"]["realitySettings"]["password"], "pub");
-        assert_eq!(cfg["outbounds"][0]["streamSettings"]["method"], "raw");
+        assert_eq!(cfg["outbounds"][0]["streamSettings"]["realitySettings"]["publicKey"], "pub");
+        assert_eq!(cfg["outbounds"][0]["streamSettings"]["network"], "raw");
         assert_eq!(cfg["inbounds"][0]["port"], 2080);
     }
     #[test]
