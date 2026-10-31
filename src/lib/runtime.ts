@@ -91,6 +91,16 @@ export async function fetchSubscription(url: string): Promise<SubscriptionFetch>
   return invoke<SubscriptionFetch>('fetch_subscription', { url });
 }
 export type SubscriptionFetch = { content: string; title: string | null };
+export async function readClipboard(): Promise<string> {
+  if (isAndroidNative()) {
+    return window.WaylineAndroid?.readClipboard?.() ?? '';
+  }
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return '';
+  }
+}
 export async function coreLog(): Promise<string> {
   if (isAndroidNative()) return 'Журнал Android sing-box пока доступен только через системный logcat.';
   requireDesktop();
