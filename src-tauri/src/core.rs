@@ -115,11 +115,30 @@ pub fn stop_on_exit(app: &AppHandle) {
     }
 }
 
-fn binary_path(path: &str) -> Result<PathBuf, String> {
-    let path = path.trim();
-    if path.is_empty() { return Ok(PathBuf::from(if cfg!(windows) { "sing-box.exe" } else { "sing-box" })); }
+fn binary_path(path: &str, engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
+    let default_name = match (engine, cfg!(windows)) {
+        ("xray", true) => "xray.exe",
+        ("xray", false) => "xray",
+        ("sing-box", true) => "sing-box.exe",
+        ("sing-box", false) => "sing-box",
+        _ => return Err("Неизвестное сетевое ядро".into()),
+    };
+    let requested = path.trim();
+
+    // Resolve the normal UI defaults to the copy packaged inside the application.
+    // A custom path remains user-controlled.
+    if requested.is_empty() || requested == default_name {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            let bundled = resource_dir.join("binaries").join(default_name);
+            if bundled.is_file() {
+                return Ok(bundled);
+            }
+        }
+        return Ok(PathBuf::from(default_name));
+    }
+
     // Command::new never invokes a shell. Paths and arguments cannot inject shell commands.
-    Ok(PathBuf::from(path))
+    Ok(PathBuf::from(requested))
 }
 
 fn open_port() -> Result<u16, String> {
@@ -438,7 +457,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
     managed.last_error = None;
 
-    let binary = binary_path(&binary)?;
+    let binary = binary_path(&binary, &engine, &app)?;
     let port = open_port()?;
     let config = if engine == "xray" { create_xray_config(outbound, port)? } else { create_singbox_config(outbound, &mode, port)? };
     let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
