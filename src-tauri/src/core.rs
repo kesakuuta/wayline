@@ -292,7 +292,7 @@ pub fn fetch_subscription(url: String) -> Result<String, String> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(12))
         .build().map_err(|e| e.to_string())?;
-    let mut response = client.get(parsed).send().map_err(|e| format!("Ошибка загрузки подписки: {e}"))?
+    let response = client.get(parsed).send().map_err(|e| format!("Ошибка загрузки подписки: {e}"))?
         .error_for_status().map_err(|e| format!("Ответ сервера подписки: {e}"))?;
     const MAX_SIZE: usize = 2_000_000;
     if response.content_length().unwrap_or(0) > MAX_SIZE as u64 { return Err("Подписка превышает 2 МБ".into()); }
