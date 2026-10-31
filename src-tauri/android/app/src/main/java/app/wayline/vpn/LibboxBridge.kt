@@ -26,7 +26,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
     private val boxPackage = "io.nekohasekai.libbox."
     private var commandServer: Any? = null
-    private var tunFd: Int? = null
+    private var tunDescriptor: ParcelFileDescriptor? = null
     private var defaultInterfaceCallback: ConnectivityManager.NetworkCallback? = null
     private var networkCallbackThread: HandlerThread? = null
 
@@ -164,31 +164,51 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
         val autoRoute = call(options, "getAutoRoute") as? Boolean ?: true
         if (autoRoute) {
-            val route4 = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) "getInet4RouteAddress" else "getInet4RouteRange"
-            val route6 = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) "getInet6RouteAddress" else "getInet6RouteRange"
-            addRouteList(builder, options, route4)
-            addRouteList(builder, options, route6)
+            if (!dnsDisabled(options)) {
+                consume(call(options, "getDNSServerAddress")) { address ->
+                    builder.addDnsServer(address)
+                }
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val route4 = call(options, "getInet4RouteAddress")
+                if (hasNext(route4)) addRouteList(builder, options, "getInet4RouteAddress")
+                else if (hasNext(call(options, "getInet4Address"))) builder.addRoute("0.0.0.0", 0)
+
+                val route6 = call(options, "getInet6RouteAddress")
+                if (hasNext(route6)) addRouteList(builder, options, "getInet6RouteAddress")
+                else if (hasNext(call(options, "getInet6Address"))) builder.addRoute("::", 0)
+
                 addExcludeRouteList(builder, options, "getInet4RouteExcludeAddress")
                 addExcludeRouteList(builder, options, "getInet6RouteExcludeAddress")
+            } else {
+                addRouteList(builder, options, "getInet4RouteRange")
+                addRouteList(builder, options, "getInet6RouteRange")
             }
-            consume(call(options, "getDNSServerAddress")) { address ->
-                runCatching { builder.addDnsServer(address) }
+            consume(call(options, "getIncludePackage")) { packageName ->
+                builder.addAllowedApplication(packageName)
             }
-        }
-
-        consume(call(options, "getIncludePackage")) { packageName ->
-            builder.addAllowedApplication(packageName)
-        }
-        consume(call(options, "getExcludePackage")) { packageName ->
-            builder.addDisallowedApplication(packageName)
+            consume(call(options, "getExcludePackage")) { packageName ->
+                builder.addDisallowedApplication(packageName)
+            }
         }
 
         val descriptor = builder.establish()
             ?: throw IllegalStateException("Android не выдал VPN-интерфейс (разрешение отозвано?)")
-        val fd = descriptor.detachFd()
-        tunFd = fd
-        return fd
+        tunDescriptor = descriptor
+        return descriptor.fd
+    }
+
+    private fun hasNext(iterator: Any?): Boolean {
+        if (iterator == null) return false
+        val method = iterator.javaClass.methods.firstOrNull { it.name.equals("hasNext", true) } ?: return false
+        return runCatching { invoke(method, iterator) as? Boolean == true }.getOrDefault(false)
+    }
+
+    private fun dnsDisabled(options: Any): Boolean {
+        val mode = call(options, "getDnsMode") ?: return false
+        val value = (call(mode, "getValue") as? Number)?.toInt() ?: return false
+        val disabled = runCatching { load("Libbox", service.classLoader ?: javaClass.classLoader!!).getField("DNSModeDisabled").getInt(null) }.getOrNull()
+        return disabled != null && value == disabled
     }
 
     private fun addAddressList(builder: VpnService.Builder, options: Any, getter: String) {
@@ -433,8 +453,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     }
 
     private fun closeTun() {
-        tunFd?.let { fd -> runCatching { ParcelFileDescriptor.adoptFd(fd).close() } }
-        tunFd = null
+        runCatching { tunDescriptor?.close() }
+        tunDescriptor = null
     }
 
     private fun root(error: Throwable): Throwable =
