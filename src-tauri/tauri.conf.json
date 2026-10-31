@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "category": "Utility",
-    "shortDescription": "Wayline VPN client with managed sing-box core",
+    "shortDescription": "Wayline VPN client with Xray and sing-box cores",
     "longDescription": "Tauri desktop client with Xray local proxy and sing-box proxy/TUN support.",
     "icon": [
       "icons/32x32.png",
