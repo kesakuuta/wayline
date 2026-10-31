@@ -96,7 +96,7 @@ class MainActivity : TauriActivity() {
                 .put("running", running)
                 .put("connecting", connecting)
                 .put("mode", mode ?: JSONObject.NULL)
-                .put("port", JSONObject.NULL)
+                .put("port", if (running && mode == WaylineVpnService.MODE_PROXY) 2080 else JSONObject.NULL)
                 .put("uptimeSeconds", if (running && started > 0) ((System.currentTimeMillis() - started) / 1000) else 0)
                 .put("verification", if (running) "unverified" else JSONObject.NULL)
                 .put("engine", if (running || connecting) "sing-box" else JSONObject.NULL)
