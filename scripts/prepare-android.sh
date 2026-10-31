@@ -72,8 +72,12 @@ if 'abiFilters' not in s:
     if m:
         pos = m.end()
         s = s[:pos] + '\n        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }\n' + s[pos:]
-if 'com.github.singbox-android:libbox:1.14.4' not in s:
-    s += '\ndependencies {\n    implementation("androidx.core:core-ktx:1.15.0")\n    implementation("androidx.appcompat:appcompat:1.7.0")\n    implementation("com.github.singbox-android:libbox:1.14.4")\n}\n'
+libbox_dependency = "com.github.singbox-android:libbox:1.14.4"
+dependency_pattern = r'com\.github\.singbox-android:libbox:[^"]+'
+if re.search(dependency_pattern, s):
+    s = re.sub(dependency_pattern, libbox_dependency, s)
+else:
+    s += '\\ndependencies {\\n    implementation("androidx.core:core-ktx:1.15.0")\\n    implementation("androidx.appcompat:appcompat:1.7.0")\\n    implementation("' + libbox_dependency + '")\\n}\\n'
 p.write_text(s)
 PYGRADLE
 
