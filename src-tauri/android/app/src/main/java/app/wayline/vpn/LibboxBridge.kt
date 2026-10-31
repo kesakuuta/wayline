@@ -443,7 +443,20 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
     @Synchronized
     internal fun releaseAfterCoreStopped() {
+        val server = commandServer
         commandServer = null
+        if (server != null) {
+            runCatching {
+                server.javaClass.methods.firstOrNull {
+                    it.name.equals("closeService", true) && it.parameterTypes.isEmpty()
+                }?.invoke(server)
+            }
+            runCatching {
+                server.javaClass.methods.firstOrNull {
+                    it.name.equals("close", true) && it.parameterTypes.isEmpty()
+                }?.invoke(server)
+            }
+        }
         closeDefaultInterfaceMonitor()
         closeTun()
     }
