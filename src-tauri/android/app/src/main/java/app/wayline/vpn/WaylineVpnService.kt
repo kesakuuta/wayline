@@ -143,7 +143,8 @@ class WaylineVpnService : VpnService() {
         engine = null
         runCatching { active?.stop() }
         startedAt = 0L
-        saveStatus(running = false, connecting = false, error = null, mode = currentMode)
+        val lastError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
+        saveStatus(running = false, connecting = false, error = lastError, mode = currentMode)
         worker.shutdown()
         super.onDestroy()
     }
