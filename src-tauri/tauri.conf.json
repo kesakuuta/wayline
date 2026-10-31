@@ -27,7 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "category": "Network",
+    "category": "Utility",
     "shortDescription": "Wayline VPN client with managed sing-box core",
     "longDescription": "Tauri desktop client with Xray local proxy and sing-box proxy/TUN support.",
     "icon": [
