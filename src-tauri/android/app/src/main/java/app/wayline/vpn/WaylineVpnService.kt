@@ -9,33 +9,53 @@ import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import org.json.JSONObject
+import java.util.concurrent.Executors
 
 class WaylineVpnService : VpnService() {
-    private var engine: LibboxBridge? = null
-    private var startedAt = 0L
+    @Volatile private var engine: LibboxBridge? = null
+    @Volatile private var startedAt = 0L
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Wayline-Libbox").apply { isDaemon = true }
+    }
 
-    override fun onCreate() { super.onCreate(); createNotificationChannel() }
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopVpn()
+            ACTION_STOP -> worker.execute { stopVpn() }
             ACTION_START -> {
-                startForeground(NOTIFICATION_ID, buildNotification("Запуск sing-box…"))
                 val config = intent.getStringExtra(EXTRA_CONFIG)
-                try {
-                    if (config.isNullOrBlank()) throw IllegalArgumentException("Не передан sing-box config")
-                    val bridge = LibboxBridge(this)
-                    bridge.start(config)
-                    engine = bridge
-                    startedAt = System.currentTimeMillis()
-                    saveStatus(true, null)
-                    updateNotification("VPN подключён")
-                } catch (e: Throwable) {
-                    engine?.stop(); engine = null
-                    saveStatus(false, e.message ?: "Ошибка запуска sing-box")
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf(startId)
+                val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_TUN
+                startForeground(NOTIFICATION_ID, buildNotification("Запуск sing-box…"))
+                saveStatus(running = false, connecting = true, error = null, mode = mode)
+                worker.execute {
+                    try {
+                        if (config.isNullOrBlank()) throw IllegalArgumentException("Не передан sing-box config")
+                        if (mode == MODE_TUN && VpnService.prepare(this) != null) {
+                            throw IllegalStateException("Android не выдал разрешение VPN")
+                        }
+                        val bridge = LibboxBridge(this)
+                        bridge.start(config)
+                        engine = bridge
+                        startedAt = System.currentTimeMillis()
+                        saveStatus(running = true, connecting = false, error = null, mode = mode)
+                        updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Локальный прокси запущен")
+                    } catch (error: Throwable) {
+                        runCatching { engine?.stop() }
+                        engine = null
+                        startedAt = 0L
+                        saveStatus(
+                            running = false,
+                            connecting = false,
+                            error = root(error).message ?: root(error).javaClass.simpleName,
+                            mode = mode
+                        )
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf(startId)
+                    }
                 }
             }
             else -> stopSelf(startId)
@@ -47,7 +67,7 @@ class WaylineVpnService : VpnService() {
         runCatching { engine?.stop() }
         engine = null
         startedAt = 0L
-        saveStatus(false, null)
+        saveStatus(running = false, connecting = false, error = null, mode = MODE_TUN)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -55,15 +75,19 @@ class WaylineVpnService : VpnService() {
     internal fun onCoreStopped() {
         engine = null
         startedAt = 0L
-        saveStatus(false, "sing-box остановлен")
+        saveStatus(running = false, connecting = false, error = "sing-box остановлен", mode = MODE_TUN)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun saveStatus(running: Boolean, error: String?) {
+    private fun saveStatus(running: Boolean, connecting: Boolean, error: String?, mode: String) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putBoolean(KEY_RUNNING, running).putString(KEY_ERROR, error)
-            .putLong(KEY_STARTED, if (running) startedAt else 0L).apply()
+            .putBoolean(KEY_RUNNING, running)
+            .putBoolean(KEY_CONNECTING, connecting)
+            .putString(KEY_ERROR, error)
+            .putString(KEY_MODE, mode)
+            .putLong(KEY_STARTED, if (running) startedAt else 0L)
+            .apply()
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
     }
 
@@ -72,10 +96,18 @@ class WaylineVpnService : VpnService() {
     }
 
     private fun buildNotification(status: String): Notification {
-        val openApp = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_warning).setContentTitle("Wayline VPN")
-            .setContentText(status).setContentIntent(openApp).setOngoing(true).setOnlyAlertOnce(true).build()
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("Wayline VPN")
+            .setContentText(status)
+            .setContentIntent(openApp)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
     }
 
     private fun createNotificationChannel() {
@@ -86,18 +118,36 @@ class WaylineVpnService : VpnService() {
         }
     }
 
-    override fun onRevoke() { stopVpn(); super.onRevoke() }
-    override fun onDestroy() { runCatching { engine?.stop() }; engine = null; saveStatus(false, null); super.onDestroy() }
+    override fun onRevoke() {
+        worker.execute { stopVpn() }
+        super.onRevoke()
+    }
+
+    override fun onDestroy() {
+        runCatching { engine?.stop() }
+        engine = null
+        startedAt = 0L
+        worker.shutdown()
+        super.onDestroy()
+    }
+
+    private fun root(error: Throwable): Throwable =
+        (error as? java.lang.reflect.InvocationTargetException)?.targetException ?: error
 
     companion object {
         const val ACTION_START = "app.wayline.vpn.action.START"
         const val ACTION_STOP = "app.wayline.vpn.action.STOP"
         const val ACTION_STATUS = "app.wayline.vpn.action.STATUS"
         const val EXTRA_CONFIG = "config_json"
+        const val EXTRA_MODE = "connection_mode"
+        const val MODE_TUN = "tun"
+        const val MODE_PROXY = "proxy"
         const val PREFS = "wayline_vpn"
         const val KEY_RUNNING = "running"
+        const val KEY_CONNECTING = "connecting"
         const val KEY_ERROR = "error"
         const val KEY_STARTED = "started_at"
+        const val KEY_MODE = "mode"
         private const val CHANNEL_ID = "wayline_vpn_status"
         private const val NOTIFICATION_ID = 4101
     }
