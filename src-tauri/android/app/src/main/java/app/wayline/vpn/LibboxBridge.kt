@@ -19,6 +19,11 @@ import java.net.NetworkInterface
  * and CommandServer.startOrReloadService(config, OverrideOptions).
  */
 internal class LibboxBridge(private val service: WaylineVpnService) {
+    companion object {
+        private val setupLock = Any()
+        @Volatile private var setupComplete = false
+    }
+
     private val boxPackage = "io.nekohasekai.libbox."
     private var commandServer: Any? = null
     private var tunFd: Int? = null
@@ -31,19 +36,29 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         stop()
 
         val loader = service.classLoader ?: javaClass.classLoader!!
-        val setupOptionsType = load("SetupOptions", loader)
-        val setupOptions = setupOptionsType.getDeclaredConstructor().newInstance()
-        setProperty(setupOptions, "basePath", service.filesDir.absolutePath)
-        setProperty(setupOptions, "workingPath", (service.getExternalFilesDir(null) ?: service.filesDir).absolutePath)
-        setProperty(setupOptions, "tempPath", service.cacheDir.absolutePath)
-        setProperty(setupOptions, "logMaxLines", 3000)
-
         val libbox = load("Libbox", loader)
-        val setup = libbox.methods.firstOrNull {
-            it.name.equals("setup", true) && it.parameterTypes.size == 1 &&
-                it.parameterTypes[0].isAssignableFrom(setupOptionsType)
-        } ?: throw IllegalStateException("В libbox 1.14.0 не найден Libbox.setup(SetupOptions)")
-        invoke(setup, null, setupOptions)
+        synchronized(setupLock) {
+            if (!setupComplete) {
+                runCatching {
+                    libbox.methods.firstOrNull {
+                        it.name.equals("setLocale", true) && it.parameterTypes.contentEquals(arrayOf(String::class.java))
+                    }?.invoke(null, java.util.Locale.getDefault().toLanguageTag())
+                }
+                val setupOptionsType = load("SetupOptions", loader)
+                val setupOptions = setupOptionsType.getDeclaredConstructor().newInstance()
+                setProperty(setupOptions, "basePath", service.filesDir.absolutePath)
+                setProperty(setupOptions, "workingPath", (service.getExternalFilesDir(null) ?: service.filesDir).absolutePath)
+                setProperty(setupOptions, "tempPath", service.cacheDir.absolutePath)
+                setProperty(setupOptions, "logMaxLines", 3000)
+                setProperty(setupOptions, "fixAndroidStack", true)
+                val setup = libbox.methods.firstOrNull {
+                    it.name.equals("setup", true) && it.parameterTypes.size == 1 &&
+                        it.parameterTypes[0].isAssignableFrom(setupOptionsType)
+                } ?: throw IllegalStateException("В libbox 1.14.0 не найден Libbox.setup(SetupOptions)")
+                invoke(setup, null, setupOptions)
+                setupComplete = true
+            }
+        }
 
         val platformType = load("PlatformInterface", loader)
         val handlerType = load("CommandServerHandler", loader)
