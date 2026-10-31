@@ -144,3 +144,17 @@
   .import-actions .mini-primary,
   .import-actions .secondary-btn { font-size: 10px; padding: 0 7px; gap: 4px; }
 }
+
+
+/* Subscription action menu must escape the horizontally scrollable profile strip. */
+.context-menu-floating {
+  position: fixed;
+  right: auto;
+  z-index: 10000;
+}
+@media (hover: none) {
+  .tab-more {
+    display: grid;
+    place-items: center;
+  }
+}
