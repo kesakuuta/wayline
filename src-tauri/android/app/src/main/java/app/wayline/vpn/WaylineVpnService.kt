@@ -66,8 +66,9 @@ class WaylineVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        runCatching { engine?.stop() }
+        val active = engine
         engine = null
+        runCatching { active?.stop() }
         startedAt = 0L
         saveStatus(running = false, connecting = false, error = null, mode = currentMode)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -75,7 +76,9 @@ class WaylineVpnService : VpnService() {
     }
 
     internal fun onCoreStopped() {
+        val active = engine
         engine = null
+        runCatching { active?.releaseAfterCoreStopped() }
         startedAt = 0L
         saveStatus(running = false, connecting = false, error = "sing-box остановлен", mode = currentMode)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -83,7 +86,9 @@ class WaylineVpnService : VpnService() {
     }
 
     internal fun onCoreError(message: String) {
+        val active = engine
         engine = null
+        runCatching { active?.releaseAfterCoreStopped() }
         startedAt = 0L
         saveStatus(running = false, connecting = false, error = message, mode = currentMode)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -134,9 +139,11 @@ class WaylineVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        runCatching { engine?.stop() }
+        val active = engine
         engine = null
+        runCatching { active?.stop() }
         startedAt = 0L
+        saveStatus(running = false, connecting = false, error = null, mode = currentMode)
         worker.shutdown()
         super.onDestroy()
     }
