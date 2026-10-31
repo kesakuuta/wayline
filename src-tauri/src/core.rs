@@ -316,7 +316,7 @@ fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Optio
     }
     if first_syntax_error.is_some() {
         // Do not fail the connection on a CLI usage mismatch in the optional
-        // -test preflight. Start Xray with the canonical "run -config" form;
+        // -test preflight. Start Xray with the canonical "run -c" form;
         // its real startup output and the SOCKS probe remain authoritative.
         return Ok((None, false));
     }
@@ -469,7 +469,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     if engine == "xray" && xray_legacy_cli {
         command.arg("-config").arg(&config_path);
     } else if engine == "xray" {
-        command.arg("run").arg("-config").arg(&config_path);
+        command.arg("run").arg("-c").arg(&config_path);
     } else {
         command.arg("run").arg("-c").arg(&config_path);
     }
