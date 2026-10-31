@@ -207,6 +207,13 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         val values = mutableListOf<Any>()
         val all = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull() ?: return iteratorProxy(loader, "NetworkInterfaceIterator", values)
         val connectivity = service.getSystemService(ConnectivityManager::class.java)
+        val physicalNetwork = connectivity?.let { findUnderlyingNetwork(it) }
+        val physicalLink = if (connectivity != null && physicalNetwork != null) {
+            connectivity.getLinkProperties(physicalNetwork)
+        } else null
+        val physicalCapabilities = if (connectivity != null && physicalNetwork != null) {
+            connectivity.getNetworkCapabilities(physicalNetwork)
+        } else null
         while (all.hasMoreElements()) {
             val networkInterface = all.nextElement()
             runCatching {
@@ -215,20 +222,26 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                 setProperty(item, "index", networkInterface.index)
                 setProperty(item, "mtu", networkInterface.mtu)
                 setProperty(item, "flags", 0)
-                setProperty(item, "type", 0)
-                setProperty(item, "metered", false)
+                val interfaceType = when {
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> 2
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> 3
+                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> 4
+                    else -> 0
+                }
+                setProperty(item, "type", interfaceType)
+                setProperty(item, "metered", physicalCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true)
                 setProperty(item, "addresses", iteratorProxy(loader, "StringIterator",
                     networkInterface.interfaceAddresses.mapNotNull { it.address?.hostAddress?.let { ip -> "$ip/${it.networkPrefixLength}" } }))
-                val link = connectivity?.getLinkProperties(connectivity.activeNetwork)
-                if (link?.interfaceName == networkInterface.name) {
-                    setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator", link.dnsServers.mapNotNull { it.hostAddress }))
+                if (physicalLink?.interfaceName == networkInterface.name) {
+                    setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator", physicalLink.dnsServers.mapNotNull { it.hostAddress }))
                     setProperty(item, "gateway", iteratorProxy(loader, "StringIterator",
-                        link.routes.filter { it.destination.prefixLength == 0 }.mapNotNull { it.gateway?.hostAddress }))
+                        physicalLink.routes.filter { it.destination.prefixLength == 0 }.mapNotNull { it.gateway?.hostAddress }))
                 } else {
                     setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator", emptyList()))
                     setProperty(item, "gateway", iteratorProxy(loader, "StringIterator", emptyList()))
                 }
-                setProperty(item, "dnsSearchDomain", iteratorProxy(loader, "StringIterator", emptyList()))
+                setProperty(item, "dnsSearchDomain", iteratorProxy(loader, "StringIterator",
+                    physicalLink?.domains?.split(' ')?.filter { it.isNotBlank() }?.let { it } ?: emptyList()))
                 values.add(item)
             }
         }
