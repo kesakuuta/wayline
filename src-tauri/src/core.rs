@@ -251,25 +251,25 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
     }))
 }
 
-fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<std::process::Output> {
+fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(std::process::Output, bool)> {
     let modern = Command::new(binary)
         .arg("run").arg("-test").arg("-config").arg(config).output()?;
     if modern.status.success() {
-        return Ok(modern);
+        return Ok((modern, false));
     }
     let modern_error = format!("{} {}", String::from_utf8_lossy(&modern.stdout), String::from_utf8_lossy(&modern.stderr));
     // Older Xray builds expose the test flag at the root command instead of under run.
-    // Retry only for the explicit unknown-flag error; don't hide real config failures.
+    // Retry only for the explicit unknown-flag error and keep the CLI mode for process startup.
     if modern_error.contains("flag provided but not defined") && modern_error.contains("-test") {
         let mut legacy = Command::new(binary).arg("-test").arg("-config").arg(config).output()?;
         if legacy.status.success() {
-            return Ok(legacy);
+            return Ok((legacy, true));
         }
         let legacy_error = format!("{} {}", String::from_utf8_lossy(&legacy.stdout), String::from_utf8_lossy(&legacy.stderr));
         legacy.stderr = format!("Modern Xray invocation: {modern_error}\nLegacy Xray invocation: {legacy_error}").into_bytes();
-        return Ok(legacy);
+        return Ok((legacy, true));
     }
-    Ok(modern)
+    Ok((modern, false))
 }
 
 fn write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -396,14 +396,15 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log_path = dir.join(if engine == "xray" { "xray.log" } else { "sing-box.log" });
     write_private(&config_path, &serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?)?;
 
-    let checked = if engine == "xray" {
-        run_xray_config_check(&binary, &config_path)
+    let (checked, xray_legacy_cli) = if engine == "xray" {
+        match run_xray_config_check(&binary, &config_path) {
+            Ok(value) => value,
+            Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Укажите путь к бинарнику в настройках.", binary.display())); }
+        }
     } else {
-        Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
-    };
-    let checked = match checked {
-        Ok(value) => value,
-        Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Укажите путь к бинарнику в настройках.", binary.display())); }
+        let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
+            .map_err(|err| format!("Не удалось запустить sing-box ({}): {err}", binary.display()))?;
+        (output, false)
     };
     if !checked.status.success() {
         let _ = fs::remove_file(&config_path);
@@ -412,8 +413,13 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(&binary);
-    if engine == "xray" { command.arg("run").arg("-config").arg(&config_path); }
-    else { command.arg("run").arg("-c").arg(&config_path); }
+    if engine == "xray" && xray_legacy_cli {
+        command.arg("-config").arg(&config_path);
+    } else if engine == "xray" {
+        command.arg("run").arg("-config").arg(&config_path);
+    } else {
+        command.arg("run").arg("-c").arg(&config_path);
+    }
     let child = command
         .stdout(Stdio::from(log)).stderr(Stdio::from(errlog))
         .stdin(Stdio::null())
