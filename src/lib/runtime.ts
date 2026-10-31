@@ -75,7 +75,21 @@ export async function connect(
       route: { auto_detect_interface: true, final: 'proxy' }
     };
     android.connect(JSON.stringify(config), mode);
-    return androidStatus();
+    // Do not report "connected" merely because the Android service request was queued.
+    // Wait for VpnService + libbox to either reach running state or return a real error.
+    const deadline = Date.now() + 30_000;
+    let current = androidStatus();
+    while (current.connecting && Date.now() < deadline) {
+      await new Promise<void>(resolve => window.setTimeout(resolve, 350));
+      current = androidStatus();
+    }
+    if (current.connecting) {
+      throw new Error('Android VPN всё ещё запускается. Проверьте уведомление и журнал Android.');
+    }
+    if (!current.running) {
+      throw new Error(current.error || 'sing-box не смог запустить VPN-службу.');
+    }
+    return current;
   }
   requireDesktop();
   return invoke<CoreStatus>('core_connect', { outbound, mode, engine, binary });
