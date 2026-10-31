@@ -6,6 +6,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  XRAY_VERSION: v26.10.29
+  XRAY_WINDOWS_SHA256: fce33e81ccf50e7aab572b175519a50b5e0f9d2f5c8d1ed73012ea5c9ad4d58
+  SING_BOX_VERSION: 1.14.4
+  SING_BOX_WINDOWS_SHA256: 99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df
+
 jobs:
   build:
     runs-on: windows-latest
@@ -17,6 +23,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install npm packages
         run: npm install --no-audit
+      - name: Download and verify Xray-core and sing-box
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $BinDir = "src-tauri/binaries"
+          New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+
+          # Official Xray-core Windows x64 archive.
+          $XrayArchive = "xray-windows-x64.zip"
+          $XrayUrl = "https://github.com/XTLS/Xray-core/releases/download/$env:XRAY_VERSION/Xray-windows-64.zip"
+          Invoke-WebRequest -Uri $XrayUrl -OutFile $XrayArchive
+          $XrayHash = (Get-FileHash -Path $XrayArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($XrayHash -ne $env:XRAY_WINDOWS_SHA256) { throw "Xray archive SHA-256 mismatch: $XrayHash" }
+          Expand-Archive -Path $XrayArchive -DestinationPath "xray-extracted" -Force
+          $XrayExe = Get-ChildItem -Path "xray-extracted" -Filter "xray.exe" -File -Recurse | Select-Object -First 1
+          if (-not $XrayExe) { throw "xray.exe was not found in the official Xray archive" }
+          Copy-Item $XrayExe.FullName (Join-Path $BinDir "xray.exe") -Force
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/$env:XRAY_VERSION/LICENSE" -OutFile (Join-Path $BinDir "LICENSE-Xray-MPL-2.0.txt")
+
+          # Official sing-box Windows amd64 archive.
+          $SingBoxArchive = "sing-box-windows-amd64.zip"
+          $SingBoxUrl = "https://github.com/SagerNet/sing-box/releases/download/v$env:SING_BOX_VERSION/sing-box-$env:SING_BOX_VERSION-windows-amd64.zip"
+          Invoke-WebRequest -Uri $SingBoxUrl -OutFile $SingBoxArchive
+          $SingBoxHash = (Get-FileHash -Path $SingBoxArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($SingBoxHash -ne $env:SING_BOX_WINDOWS_SHA256) { throw "sing-box archive SHA-256 mismatch: $SingBoxHash" }
+          Expand-Archive -Path $SingBoxArchive -DestinationPath "sing-box-extracted" -Force
+          $SingBoxExe = Get-ChildItem -Path "sing-box-extracted" -Filter "sing-box.exe" -File -Recurse | Select-Object -First 1
+          if (-not $SingBoxExe) { throw "sing-box.exe was not found in the official sing-box archive" }
+          Copy-Item $SingBoxExe.FullName (Join-Path $BinDir "sing-box.exe") -Force
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-box/v$env:SING_BOX_VERSION/LICENSE" -OutFile (Join-Path $BinDir "NOTICE-sing-box.txt")
+          Copy-Item "LICENSE" (Join-Path $BinDir "LICENSE-sing-box-GPL-3.0.txt") -Force
+
+          Write-Host "Bundled engine versions:"
+          & (Join-Path $BinDir "xray.exe") version
+          & (Join-Path $BinDir "sing-box.exe") version
+          Get-ChildItem $BinDir | Select-Object Name, Length
+
       - name: TypeScript and frontend
         run: npm run build
       - name: Parser tests
