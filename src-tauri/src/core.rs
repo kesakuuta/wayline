@@ -251,25 +251,27 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
     }))
 }
 
-fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(std::process::Output, bool)> {
+fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Option<std::process::Output>, bool)> {
     let modern = Command::new(binary)
         .arg("run").arg("-test").arg("-config").arg(config).output()?;
     if modern.status.success() {
-        return Ok((modern, false));
+        return Ok((Some(modern), false));
     }
     let modern_error = format!("{} {}", String::from_utf8_lossy(&modern.stdout), String::from_utf8_lossy(&modern.stderr));
-    // Older Xray builds expose the test flag at the root command instead of under run.
-    // Retry only for the explicit unknown-flag error and keep the CLI mode for process startup.
+    // Some packaged Xray builds do not expose the optional -test flag. In that case,
+    // let the real "run -config" startup validate the config and verify the SOCKS listener.
     if modern_error.contains("flag provided but not defined") && modern_error.contains("-test") {
-        let mut legacy = Command::new(binary).arg("-test").arg("-config").arg(config).output()?;
+        let legacy = Command::new(binary).arg("-test").arg("-config").arg(config).output()?;
         if legacy.status.success() {
-            return Ok((legacy, true));
+            return Ok((Some(legacy), true));
         }
         let legacy_error = format!("{} {}", String::from_utf8_lossy(&legacy.stdout), String::from_utf8_lossy(&legacy.stderr));
-        legacy.stderr = format!("Modern Xray invocation: {modern_error}\nLegacy Xray invocation: {legacy_error}").into_bytes();
-        return Ok((legacy, true));
+        if legacy_error.contains("flag provided but not defined") && legacy_error.contains("-test") {
+            return Ok((None, false));
+        }
+        return Ok((Some(legacy), true));
     }
-    Ok((modern, false))
+    Ok((Some(modern), false))
 }
 
 fn write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -404,11 +406,13 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     } else {
         let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
             .map_err(|err| format!("Не удалось запустить sing-box ({}): {err}", binary.display()))?;
-        (output, false)
+        (Some(output), false)
     };
-    if !checked.status.success() {
-        let _ = fs::remove_file(&config_path);
-        return Err(format!("{engine} config check: {} {}", String::from_utf8_lossy(&checked.stdout), String::from_utf8_lossy(&checked.stderr)));
+    if let Some(checked) = checked {
+        if !checked.status.success() {
+            let _ = fs::remove_file(&config_path);
+            return Err(format!("{engine} config check: {} {}", String::from_utf8_lossy(&checked.stdout), String::from_utf8_lossy(&checked.stderr)));
+        }
     }
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
