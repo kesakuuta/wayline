@@ -92,9 +92,9 @@ needle = "dependencyResolutionManagement {"
 if needle in s:
     pos = s.find(needle)
     brace = s.find("{", pos) + 1
-    s = s[:brace] + "\\n    " + repo + "\\n" + s[brace:]
+    s = s[:brace] + "\n    " + repo + "\n" + s[brace:]
 else:
-    s += "\\ndependencyResolutionManagement { " + repo + " }\\n"
+    s += "\ndependencyResolutionManagement { " + repo + " }\n"
 p.write_text(s)
 PYSETTINGS
 fi
