@@ -54,6 +54,65 @@ function transport(p: URLSearchParams): AnyJson | undefined {
   throw new Error(`Транспорт ${type} пока не поддерживается импортом`);
 }
 
+const countryNames: Record<string, string[]> = {
+  RU: ['russia', 'россия', 'russian', 'moscow', 'москва'],
+  US: ['united states', 'usa', 'america', 'сша', 'new york', 'los angeles'],
+  GB: ['united kingdom', 'great britain', 'britain', 'england', 'london', 'uk'],
+  DE: ['germany', 'deutschland', 'германия', 'frankfurt', 'berlin'],
+  NL: ['netherlands', 'holland', 'нидерланды', 'amsterdam'],
+  FI: ['finland', 'suomi', 'финляндия', 'helsinki'],
+  FR: ['france', 'франция', 'paris'],
+  SE: ['sweden', 'sverige', 'швеция', 'stockholm'],
+  NO: ['norway', 'norge', 'норвегия', 'oslo'],
+  PL: ['poland', 'polska', 'польша', 'warsaw'],
+  CZ: ['czech', 'czechia', 'чехия', 'prague'],
+  CH: ['switzerland', 'schweiz', 'швейцария', 'zurich'],
+  AT: ['austria', 'österreich', 'австрия', 'vienna'],
+  IT: ['italy', 'италия', 'rome', 'milan'],
+  ES: ['spain', 'españa', 'испания', 'madrid'],
+  PT: ['portugal', 'португалия', 'lisbon'],
+  TR: ['turkey', 'türkiye', 'турция', 'istanbul'],
+  EE: ['estonia', 'eesti', 'эстония', 'tallinn'],
+  LV: ['latvia', 'латвия', 'riga'],
+  LT: ['lithuania', 'литва', 'vilnius'],
+  UA: ['ukraine', 'украина', 'kyiv'],
+  KZ: ['kazakhstan', 'казахстан', 'almaty'],
+  SG: ['singapore', 'сингапур'],
+  JP: ['japan', 'япония', 'tokyo'],
+  KR: ['south korea', 'korea', 'корея', 'seoul'],
+  HK: ['hong kong', 'гонконг'],
+  TW: ['taiwan', 'тайвань', 'taipei'],
+  CA: ['canada', 'канада', 'toronto'],
+  AU: ['australia', 'австралия', 'sydney'],
+  BR: ['brazil', 'brasil', 'бразилия'],
+  AE: ['uae', 'united arab emirates', 'эмираты', 'dubai'],
+  IN: ['india', 'индия', 'mumbai'],
+  ID: ['indonesia', 'индонезия', 'jakarta'],
+  TH: ['thailand', 'таиланд', 'bangkok'],
+  VN: ['vietnam', 'вьетнам', 'hanoi']
+};
+const countryFlag = (code: string) => {
+  const normalized = code.toUpperCase();
+  if (normalized === 'EU') return '🇪🇺';
+  if (normalized.length !== 2) return '🌐';
+  return String.fromCodePoint(...[...normalized].map(char => 0x1f1e6 + char.charCodeAt(0) - 65));
+};
+function inferCountryFlag(alias: string, host: string): string {
+  const source = alias.trim();
+  const emoji = source.match(/[\\u{1F1E6}-\\u{1F1FF}]{2}/u);
+  if (emoji) return emoji[0];
+  const normalized = source.toLowerCase();
+  for (const [code, names] of Object.entries(countryNames)) {
+    if (names.some(name => normalized.includes(name))) return countryFlag(code);
+    const token = new RegExp('(?:^|[^a-z])' + code + '(?:$|[^a-z])', 'i');
+    if (token.test(source)) return countryFlag(code);
+  }
+  if (/\\bEU\\b/i.test(source)) return countryFlag('EU');
+  const tld = host.toLowerCase().match(/\\.([a-z]{2})$/)?.[1]?.toUpperCase();
+  if (tld && countryNames[tld]) return countryFlag(tld);
+  return '🌐';
+}
+
 function asServer(outbound: AnyJson, name: string): ImportedServer {
   const host = string(outbound.server);
   if (!host || /[\s\x00-\x1f]/.test(host)) throw new Error('Некорректный адрес сервера');
@@ -66,7 +125,7 @@ function asServer(outbound: AnyJson, name: string): ImportedServer {
   const outboundCopy = { ...outbound };
   delete outboundCopy.tag;
   return {
-    id: crypto.randomUUID(), name: label, region: host, flag: '🌐',
+    id: crypto.randomUUID(), name: label, region: host, flag: inferCountryFlag(name, host),
     protocol: type === 'hysteria2' ? 'Hysteria2' : type.toUpperCase(),
     transport: `${isObject(outbound.tls) && outbound.tls.reality ? 'REALITY' : outbound.tls ? 'TLS' : 'TCP'} · ${port}`,
     outbound: outboundCopy,
