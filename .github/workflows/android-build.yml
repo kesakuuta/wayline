@@ -64,9 +64,33 @@ jobs:
       - name: Build Android APK
         run: cargo tauri android build --apk --target aarch64
 
-      - name: Upload APK
+      - name: Sign APK for testing
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          mkdir -p "$HOME/.android" signed-apk
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" signed-apk/wayline-unsigned-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$HOME/.android/debug.keystore" \
+            --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out signed-apk/Wayline-debug-signed.apk \
+            signed-apk/wayline-unsigned-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs signed-apk/Wayline-debug-signed.apk
+          rm signed-apk/wayline-unsigned-aligned.apk
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: wayline-android-arm64-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: wayline-android-arm64-signed-apk
+          path: signed-apk/Wayline-debug-signed.apk
           if-no-files-found: error
