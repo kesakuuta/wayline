@@ -6,7 +6,6 @@ import android.os.Build
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.result.contract.ActivityResultContracts
-import app.tauri.TauriActivity
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
