@@ -251,27 +251,73 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
     }))
 }
 
+fn xray_output_text(output: &std::process::Output) -> String {
+    format!("{} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
+}
+
+fn xray_rejects_test_flag(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("flag provided but not defined") && lower.contains("-test")
+}
+
+fn xray_command_syntax_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("expected run command")
+        || lower.contains("unknown command")
+        || lower.contains("unknown shorthand flag")
+        || lower.contains("unknown flag")
+        || lower.contains("flag provided but not defined")
+        || lower.contains("usage:")
+}
+
 fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Option<std::process::Output>, bool)> {
-    let modern = Command::new(binary)
-        .arg("run").arg("-test").arg("-config").arg(config).output()?;
-    if modern.status.success() {
-        return Ok((Some(modern), false));
-    }
-    let modern_error = format!("{} {}", String::from_utf8_lossy(&modern.stdout), String::from_utf8_lossy(&modern.stderr));
-    // Some packaged Xray builds do not expose the optional -test flag. In that case,
-    // let the real "run -config" startup validate the config and verify the SOCKS listener.
-    if modern_error.contains("flag provided but not defined") && modern_error.contains("-test") {
-        let legacy = Command::new(binary).arg("-test").arg("-config").arg(config).output()?;
-        if legacy.status.success() {
-            return Ok((Some(legacy), true));
+    // Xray CLI releases differ: recent versions use "xray run -test -config",
+    // while older builds expose the default command as "xray -test -config".
+    // Probe both full and short config flags before deciding how to launch.
+    let attempts: [(&[&str], bool); 4] = [
+        (&["run", "-test", "-config"], false),
+        (&["run", "-test", "-c"], false),
+        (&["-test", "-config"], true),
+        (&["-test", "-c"], true),
+    ];
+    let mut unsupported_test_flag = false;
+    let mut first_syntax_error: Option<(std::process::Output, bool)> = None;
+
+    for (arguments, legacy_cli) in attempts {
+        let mut command = Command::new(binary);
+        for argument in arguments {
+            command.arg(argument);
         }
-        let legacy_error = format!("{} {}", String::from_utf8_lossy(&legacy.stdout), String::from_utf8_lossy(&legacy.stderr));
-        if legacy_error.contains("flag provided but not defined") && legacy_error.contains("-test") {
-            return Ok((None, false));
+        let output = command.arg(config).output()?;
+        if output.status.success() {
+            return Ok((Some(output), legacy_cli));
         }
-        return Ok((Some(legacy), true));
+
+        let message = xray_output_text(&output);
+        if xray_rejects_test_flag(&message) {
+            unsupported_test_flag = true;
+            continue;
+        }
+        if xray_command_syntax_error(&message) {
+            if first_syntax_error.is_none() {
+                first_syntax_error = Some((output, legacy_cli));
+            }
+            continue;
+        }
+
+        // This is a real config/semantic error, not a CLI syntax mismatch.
+        return Ok((Some(output), legacy_cli));
     }
-    Ok((Some(modern), false))
+
+    if unsupported_test_flag {
+        // Some repackaged builds omit -test entirely. Let the actual process
+        // startup validate the generated config and verify its SOCKS listener.
+        return Ok((None, false));
+    }
+    if let Some((output, legacy_cli)) = first_syntax_error {
+        return Ok((Some(output), legacy_cli));
+    }
+    Ok((None, false))
 }
 
 fn write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -460,6 +506,20 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn xray_cli_fallback_detects_expected_run_command() {
+        assert!(xray_command_syntax_error("expected run command"));
+        assert!(xray_command_syntax_error("flag provided but not defined: -test"));
+        assert!(!xray_command_syntax_error("failed to load config: invalid UUID"));
+    }
+
+    #[test]
+    fn xray_test_flag_fallback_is_specific() {
+        assert!(xray_rejects_test_flag("flag provided but not defined: -test"));
+        assert!(!xray_rejects_test_flag("expected run command"));
+        assert!(!xray_rejects_test_flag("unknown flag: -config"));
+    }
+
     #[test]
     fn tun_route_and_remote_are_generated() {
         let cfg = create_singbox_config(json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}), "tun", 2080).unwrap();

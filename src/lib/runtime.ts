@@ -52,12 +52,10 @@ export async function connect(
       ? [{
           type: 'tun',
           tag: 'tun-in',
-          inet4_address: ['172.19.0.1/30'],
-          inet6_address: ['fdfe:dcba:9876::1/126'],
+          address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
           mtu: 1500,
           auto_route: true,
-          stack: 'system',
-          sniff: true
+          stack: 'system'
         }]
       : [{
           type: 'mixed',
@@ -74,7 +72,11 @@ export async function connect(
       },
       inbounds,
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
-      route: { auto_detect_interface: true, final: 'proxy' }
+      route: {
+        auto_detect_interface: true,
+        rules: [{ action: 'sniff' }],
+        final: 'proxy'
+      }
     };
     android.connect(JSON.stringify(config), mode);
     // Do not report "connected" merely because the Android service request was queued.
