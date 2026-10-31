@@ -42,6 +42,8 @@ export async function connect(
   binary: string
 ): Promise<CoreStatus> {
   if (isAndroidNative()) {
+    const android = window.WaylineAndroid;
+    if (!android) throw new Error('Нативный Android-модуль Wayline не найден. Пересоберите приложение.');
     const selected = { ...outbound, tag: 'proxy' };
     const inbounds = mode === 'tun'
       ? [{
@@ -72,7 +74,7 @@ export async function connect(
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: { auto_detect_interface: true, final: 'proxy' }
     };
-    window.WaylineAndroid.connect(JSON.stringify(config), mode);
+    android.connect(JSON.stringify(config), mode);
     return androidStatus();
   }
   requireDesktop();
