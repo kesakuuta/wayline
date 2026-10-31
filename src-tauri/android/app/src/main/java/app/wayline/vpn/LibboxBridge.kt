@@ -39,7 +39,7 @@ internal class LibboxBridge(private val service: VpnService) {
         val handler = Proxy.newProxyInstance(loader, arrayOf(handlerType)) { _, method, _ ->
             when (method.name.lowercase()) {
                 "getsystemproxystatus" -> null
-                "servicestop" -> { service.onCoreStopped(); null }
+                "servicestop" -> { (service as? WaylineVpnService)?.onCoreStopped(); null }
                 "servicereload", "setsystemproxyenabled", "triggernativecrash", "writedebugmessage", "connectsshagent", "writemessage", "seterror" -> null
                 else -> defaultValue(method.returnType)
             }
