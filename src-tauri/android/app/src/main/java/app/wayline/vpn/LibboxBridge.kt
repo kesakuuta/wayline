@@ -239,50 +239,49 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
     private fun networkInterfaces(loader: ClassLoader): Any {
         val itemType = load("NetworkInterface", loader)
-        val values = mutableListOf<Any>()
-        val all = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull() ?: return iteratorProxy(loader, "NetworkInterfaceIterator", values)
         val connectivity = service.getSystemService(ConnectivityManager::class.java)
-        val physicalNetwork = connectivity?.let { findUnderlyingNetwork(it) }
-        val physicalLink = if (connectivity != null && physicalNetwork != null) {
-            connectivity.getLinkProperties(physicalNetwork)
-        } else null
-        val physicalCapabilities = if (connectivity != null && physicalNetwork != null) {
-            connectivity.getNetworkCapabilities(physicalNetwork)
-        } else null
-        while (all.hasMoreElements()) {
-            val networkInterface = all.nextElement()
+            ?: return iteratorProxy(loader, "NetworkInterfaceIterator", emptyList())
+        val values = mutableListOf<Any>()
+
+        // Mirror the official sing-box Android platform adapter: resolve each Android
+        // Network separately. Do not reuse one Wi-Fi/cellular type for every interface.
+        for (network in connectivity.allNetworks) {
             runCatching {
+                val link = connectivity.getLinkProperties(network) ?: return@runCatching
+                val capabilities = connectivity.getNetworkCapabilities(network) ?: return@runCatching
+                val name = link.interfaceName ?: return@runCatching
+                val networkInterface = NetworkInterface.getByName(name) ?: return@runCatching
                 val item = itemType.getDeclaredConstructor().newInstance()
-                setProperty(item, "name", networkInterface.name)
+                setProperty(item, "name", name)
                 setProperty(item, "index", networkInterface.index)
                 setProperty(item, "mtu", networkInterface.mtu)
-                val flags = (if (networkInterface.isUp) 1 or 64 else 0) or
-                    (if (networkInterface.isLoopback) 8 else 0) or
-                    (if (networkInterface.isPointToPoint) 16 else 0) or
-                    (if (networkInterface.supportsMulticast()) 4096 else 0)
+                val flags = (if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+                } else 0) or
+                    (if (networkInterface.isLoopback) OsConstants.IFF_LOOPBACK else 0) or
+                    (if (networkInterface.isPointToPoint) OsConstants.IFF_POINTOPOINT else 0) or
+                    (if (networkInterface.supportsMulticast()) OsConstants.IFF_MULTICAST else 0)
                 setProperty(item, "flags", flags)
-                val libbox = load("Libbox", loader)
                 val interfaceType = when {
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> libboxConstant(libbox, "InterfaceTypeWIFI")
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> libboxConstant(libbox, "InterfaceTypeCellular")
-                    physicalCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> libboxConstant(libbox, "InterfaceTypeEthernet")
-                    else -> libboxConstant(libbox, "InterfaceTypeOther")
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> libboxConstant(load("Libbox", loader), "InterfaceTypeWIFI")
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> libboxConstant(load("Libbox", loader), "InterfaceTypeCellular")
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> libboxConstant(load("Libbox", loader), "InterfaceTypeEthernet")
+                    else -> libboxConstant(load("Libbox", loader), "InterfaceTypeOther")
                 }
                 setProperty(item, "type", interfaceType)
-                setProperty(item, "metered", physicalCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true)
+                setProperty(item, "metered", !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
                 setProperty(item, "addresses", iteratorProxy(loader, "StringIterator",
                     networkInterface.interfaceAddresses.mapNotNull { it.address?.hostAddress?.let { ip -> "$ip/${it.networkPrefixLength}" } }))
-                if (physicalLink?.interfaceName == networkInterface.name) {
-                    setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator", physicalLink.dnsServers.mapNotNull { it.hostAddress }))
-                    setProperty(item, "gateway", iteratorProxy(loader, "StringIterator",
-                        physicalLink.routes.filter { it.destination.prefixLength == 0 }.mapNotNull { it.gateway?.hostAddress }))
-                } else {
-                    setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator", emptyList()))
-                    setProperty(item, "gateway", iteratorProxy(loader, "StringIterator", emptyList()))
-                }
+                setProperty(item, "dnsServer", iteratorProxy(loader, "StringIterator",
+                    link.dnsServers.mapNotNull { it.hostAddress }))
+                setProperty(item, "gateway", iteratorProxy(loader, "StringIterator",
+                    link.routes.filter { it.destination.prefixLength == 0 }
+                        .mapNotNull { it.gateway?.takeUnless(InetAddress::isAnyLocalAddress)?.hostAddress }))
                 setProperty(item, "dnsSearchDomain", iteratorProxy(loader, "StringIterator",
-                    physicalLink?.domains?.split(' ')?.filter { it.isNotBlank() }?.let { it } ?: emptyList()))
+                    link.domains?.split(' ')?.filter { it.isNotBlank() } ?: emptyList()))
                 values.add(item)
+            }.onFailure {
+                Log.w("WaylineLibbox", "Не удалось описать сетевой интерфейс", it)
             }
         }
         return iteratorProxy(loader, "NetworkInterfaceIterator", values)
