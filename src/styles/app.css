@@ -107,3 +107,40 @@
 .settings-subscription>div{display:flex;flex-direction:column;gap:4px;min-width:0}
 .settings-subscription strong{font-size:12px;overflow-wrap:anywhere}
 .settings-subscription small{font-size:10px;color:var(--muted)}
+
+
+/* Import actions share identical geometry and selected server is informational. */
+.import-actions .mini-primary,
+.import-actions .secondary-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-radius: 12px;
+  white-space: nowrap;
+  line-height: 1;
+}
+.import-actions .icon-btn.small {
+  flex: 0 0 40px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+}
+.selected-state-label {
+  flex: none;
+  margin-left: auto;
+  color: var(--primary);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+@media(max-width:520px) {
+  .import-actions .mini-primary,
+  .import-actions .secondary-btn { font-size: 10px; padding: 0 7px; gap: 4px; }
+}
