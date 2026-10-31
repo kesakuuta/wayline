@@ -218,9 +218,24 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
     }
     let proxy = match protocol {
         "vless" => {
-            let mut settings = json!({"address":server,"port":server_port,"id":outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),"encryption":"none"});
-            if let Some(flow)=outbound.get("flow").and_then(Value::as_str).filter(|v|!v.is_empty()) { settings["flow"]=json!(flow); }
-            json!({"protocol":"vless","settings":settings,"streamSettings":stream})
+            let mut user = json!({
+                "id": outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),
+                "encryption": "none"
+            });
+            if let Some(flow) = outbound.get("flow").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+                user["flow"] = json!(flow);
+            }
+            json!({
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": server,
+                        "port": server_port,
+                        "users": [user]
+                    }]
+                },
+                "streamSettings": stream
+            })
         },
         "vmess" => json!({"protocol":"vmess","settings":{"vnext":[{"address":server,"port":server_port,"users":[{"id":outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),"alterId":0,"security":outbound.get("security").and_then(Value::as_str).unwrap_or("auto")}]}]},"streamSettings":stream}),
         "trojan" => json!({"protocol":"trojan","settings":{"servers":[{"address":server,"port":server_port,"password":outbound.get("password").and_then(Value::as_str).unwrap_or("")}]},"streamSettings":stream}),
@@ -448,6 +463,9 @@ mod tests {
         let outbound = json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"1234","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"example.com","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"pub","short_id":"abcd"}}});
         let cfg = create_xray_config(outbound, 2080).unwrap();
         assert_eq!(cfg["outbounds"][0]["protocol"], "vless");
+        assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["address"], "vpn.example.com");
+        assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"], "1234");
+        assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]["flow"], "xtls-rprx-vision");
         assert_eq!(cfg["outbounds"][0]["streamSettings"]["security"], "reality");
         assert_eq!(cfg["outbounds"][0]["streamSettings"]["realitySettings"]["publicKey"], "pub");
         assert_eq!(cfg["outbounds"][0]["streamSettings"]["network"], "raw");
