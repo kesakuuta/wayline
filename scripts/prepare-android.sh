@@ -62,7 +62,7 @@ if 'jitpack.io' not in s:
     marker = "dependencies {"
     if marker not in s:
         raise SystemExit("Generated app Gradle file has no dependencies block")
-    s = s.replace(marker, 'repositories { maven { url = uri("https://jitpack.io") } }\n\\n' + marker, 1)
+    s = s.replace(marker, 'repositories { maven { url = uri("https://jitpack.io") } }\n' + marker, 1)
 if re.search(r'minSdk\s*=\s*\d+', s):
     s = re.sub(r'minSdk\s*=\s*\d+', 'minSdk = 24', s, count=1)
 elif re.search(r'minSdkVersion\(\d+\)', s):
