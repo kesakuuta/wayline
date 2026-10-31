@@ -34,25 +34,31 @@ class WaylineVpnService : VpnService() {
                 startForeground(NOTIFICATION_ID, buildNotification("Запуск sing-box…"))
                 saveStatus(running = false, connecting = true, error = null, mode = mode)
                 worker.execute {
+                    var bridge: LibboxBridge? = null
                     try {
                         if (config.isNullOrBlank()) throw IllegalArgumentException("Не передан sing-box config")
                         if (mode == MODE_TUN && VpnService.prepare(this) != null) {
                             throw IllegalStateException("Android не выдал разрешение VPN")
                         }
-                        val bridge = LibboxBridge(this)
-                        bridge.start(config)
+                        bridge = LibboxBridge(this)
                         engine = bridge
+                        bridge.start(config)
+                        val storedError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
+                        if (engine !== bridge || !storedError.isNullOrBlank()) {
+                            throw IllegalStateException(storedError ?: "sing-box остановился во время запуска")
+                        }
                         startedAt = System.currentTimeMillis()
                         saveStatus(running = true, connecting = false, error = null, mode = mode)
                         updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Локальный прокси запущен")
                     } catch (error: Throwable) {
-                        runCatching { engine?.stop() }
-                        engine = null
+                        runCatching { bridge?.stop() }
+                        if (engine === bridge) engine = null
                         startedAt = 0L
+                        val previousError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
                         saveStatus(
                             running = false,
                             connecting = false,
-                            error = root(error).message ?: root(error).javaClass.simpleName,
+                            error = previousError ?: root(error).message ?: root(error).javaClass.simpleName,
                             mode = mode
                         )
                         stopForeground(STOP_FOREGROUND_REMOVE)
