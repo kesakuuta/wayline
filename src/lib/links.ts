@@ -99,7 +99,7 @@ const countryFlag = (code: string) => {
 };
 function inferCountryFlag(alias: string, host: string): string {
   const source = alias.trim();
-  const emoji = source.match(/[\\u{1F1E6}-\\u{1F1FF}]{2}/u);
+  const emoji = source.match(/[\u{1F1E6}-\u{1F1FF}]{2}/u);
   if (emoji) return emoji[0];
   const normalized = source.toLowerCase();
   for (const [code, names] of Object.entries(countryNames)) {
@@ -107,8 +107,8 @@ function inferCountryFlag(alias: string, host: string): string {
     const token = new RegExp('(?:^|[^a-z])' + code + '(?:$|[^a-z])', 'i');
     if (token.test(source)) return countryFlag(code);
   }
-  if (/\\bEU\\b/i.test(source)) return countryFlag('EU');
-  const tld = host.toLowerCase().match(/\\.([a-z]{2})$/)?.[1]?.toUpperCase();
+  if (/\bEU\b/i.test(source)) return countryFlag('EU');
+  const tld = host.toLowerCase().match(/\.([a-z]{2})$/)?.[1]?.toUpperCase();
   if (tld && countryNames[tld]) return countryFlag(tld);
   return '🌐';
 }
