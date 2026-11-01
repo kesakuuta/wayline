@@ -671,6 +671,7 @@ fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Optio
 
     for (arguments, legacy_cli) in attempts {
         let mut command = Command::new(binary);
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
         for argument in arguments {
             command.arg(argument);
         }
@@ -865,7 +866,9 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
             Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Проверьте целостность установки и наличие встроенного ядра.", binary.display())); }
         }
     } else {
-        let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
+        let mut check = Command::new(&binary);
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; check.creation_flags(0x08000000); }
+        let output = check.arg("check").arg("-c").arg(&config_path).output()
             .map_err(|err| format!("Не удалось запустить sing-box ({}): {err}", binary.display()))?;
         (Some(output), false)
     };
