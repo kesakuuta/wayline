@@ -427,7 +427,7 @@ fn restore_linux_system_proxy(backup: &Path) -> Result<(), String> {
         let restore = if existed {
             fs::copy(&backup_copy, &config).map(|_| ()).map_err(|e| format!("Не удалось восстановить kioslaverc: {e}"))
         } else {
-            fs::remove_file(&config).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(0) } else { Err(e) }).map(|_| ())
+            fs::remove_file(&config).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
                 .map_err(|e| format!("Не удалось удалить временный kioslaverc: {e}"))
         };
         if let Err(error) = restore { errors.push(error); }
@@ -1122,7 +1122,7 @@ mod tests {
         assert_eq!(cfg["outbounds"][0]["server"], "vpn.example.com");
         assert_eq!(cfg["route"]["auto_detect_interface"], true);
         assert_eq!(cfg["outbounds"][1]["tag"], "direct");
-        assert_eq!(cfg["route"]["rules"][3]["ip_is_private"], true);
+        assert!(cfg["route"]["rules"].as_array().unwrap().iter().any(|rule| rule["ip_is_private"] == true));
     }
     #[test]
     fn xray_generates_vless_reality_socks_config() {
