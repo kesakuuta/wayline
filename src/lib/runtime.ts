@@ -151,3 +151,8 @@ export async function coreLog(): Promise<string> {
   return invoke<string>('core_log');
 }
 export { isTauri, isAndroidNative };
+
+export type BackupInfo = { name: string; path: string; createdAt: number; size: number };
+export async function listBackups(): Promise<BackupInfo[]> { requireDesktop(); return invoke<BackupInfo[]>('backup_list'); }
+export async function createBackup(data: unknown): Promise<BackupInfo> { requireDesktop(); return invoke<BackupInfo>('backup_create', { data }); }
+export async function restoreBackup(name: string): Promise<{version?:number;subscriptions?:unknown;activeSub?:string}> { requireDesktop(); return invoke('backup_restore', { name }); }

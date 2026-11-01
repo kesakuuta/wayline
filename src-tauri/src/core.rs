@@ -511,6 +511,53 @@ pub fn core_log(state: State<'_, CoreState>) -> Result<String, String> {
     Ok(read_log(managed.log.as_deref()))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo { name: String, path: String, created_at: u64, size: u64 }
+
+fn backup_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("backups");
+    fs::create_dir_all(&root).map_err(|e| format!("Папка резервных копий: {e}"))?;
+    Ok(root)
+}
+
+#[tauri::command]
+pub fn backup_list(app: AppHandle) -> Result<Vec<BackupInfo>, String> {
+    let directory = backup_directory(&app)?;
+    let mut items = Vec::new();
+    for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        let created_at = metadata.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        items.push(BackupInfo { name: entry.file_name().to_string_lossy().into_owned(), path: path.to_string_lossy().into_owned(), created_at, size: metadata.len() });
+    }
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(items)
+}
+
+#[tauri::command]
+pub fn backup_create(app: AppHandle, data: Value) -> Result<BackupInfo, String> {
+    let directory = backup_directory(&app)?;
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    let name = format!("wayline-backup-{timestamp}.json");
+    let path = directory.join(&name);
+    let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+    write_private(&path, &bytes)?;
+    Ok(BackupInfo { name, path: path.to_string_lossy().into_owned(), created_at: timestamp, size: bytes.len() as u64 })
+}
+
+#[tauri::command]
+pub fn backup_restore(app: AppHandle, name: String) -> Result<Value, String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\\\') || !name.ends_with(".json") || name.chars().any(|c| c.is_control()) {
+        return Err("Некорректное имя резервной копии".into());
+    }
+    let path = backup_directory(&app)?.join(name);
+    let bytes = fs::read(path).map_err(|e| format!("Не удалось прочитать резервную копию: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("Повреждённая резервная копия: {e}"))
+}
+
 #[tauri::command]
 pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String, routing: Value) -> Result<CoreStatus, String> {
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
