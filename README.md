@@ -143,7 +143,7 @@ The preparation script generates the Tauri Android project and overlays the Wayl
 
 ### TUN reports access denied
 
-TUN is a privileged network operation. On Windows, check that the app has the required elevation and that the Wintun adapter/driver can be created. On Linux, grant the application the required `CAP_NET_ADMIN` capability or run it from an appropriately privileged session. Do not grant capabilities to binaries you did not obtain from a trusted build.
+TUN is a privileged network operation. The Windows executable requests administrator elevation through UAC at launch because sing-box must create and configure the TUN adapter. Approve the UAC prompt and make sure the Wintun driver can be installed/created. On Linux, grant the application the required `CAP_NET_ADMIN` capability or run it from an appropriately privileged session. Do not grant capabilities to binaries you did not obtain from a trusted build.
 
 ### Proxy mode does not cover every application
 

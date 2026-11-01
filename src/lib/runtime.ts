@@ -126,7 +126,7 @@ export async function fetchSubscription(url: string): Promise<SubscriptionFetch>
   if (isAndroidNative()) {
     const raw = window.WaylineAndroid?.fetchSubscription(url);
     if (!raw) throw new Error('Android не вернул содержимое подписки.');
-    const result = JSON.parse(raw) as { content?: string; title?: string | null; error?: string };
+    const result = JSON.parse(raw) as { content?: string; title?: string | null; expiresAt?: number | null; error?: string };
     if (result.error) throw new Error(result.error);
     if (typeof result.content !== 'string') throw new Error('Ответ подписки пуст или повреждён.');
     return { content: result.content, title: result.title ?? null, expiresAt: result.expiresAt ?? null };
