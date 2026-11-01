@@ -8,8 +8,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  XRAY_VERSION: v26.10.29
+  XRAY_VERSION: v26.10.31
   SING_BOX_VERSION: 1.14.4
+  XRAY_LINUX_SHA256: e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214
+  SING_BOX_LINUX_SHA256: 699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
 
 jobs:
   build:
@@ -34,9 +36,11 @@ jobs:
           set -euo pipefail
           mkdir -p src-tauri/binaries
           curl -fL "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/Xray-linux-64.zip" -o /tmp/xray.zip
+          echo "$XRAY_LINUX_SHA256  /tmp/xray.zip" | sha256sum -c -
           mkdir -p /tmp/xray && unzip -q /tmp/xray.zip -d /tmp/xray
           install -m 0755 "$(find /tmp/xray -type f -name xray | head -n 1)" src-tauri/binaries/xray
           curl -fL "https://github.com/SagerNet/sing-box/releases/download/v$SING_BOX_VERSION/sing-box-$SING_BOX_VERSION-linux-amd64.tar.gz" -o /tmp/sing-box.tar.gz
+          echo "$SING_BOX_LINUX_SHA256  /tmp/sing-box.tar.gz" | sha256sum -c -
           mkdir -p /tmp/sing-box && tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box
           install -m 0755 "$(find /tmp/sing-box -type f -name sing-box | head -n 1)" src-tauri/binaries/sing-box
           src-tauri/binaries/xray version

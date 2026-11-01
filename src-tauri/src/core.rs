@@ -487,6 +487,16 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(&binary);
+    if engine == "xray" {
+        // Xray resolves geoip.dat/geosite.dat relative to its asset directory.
+        // Packaged builds keep the data files beside the executable in resources.
+        if let Some(asset_dir) = binary.parent().filter(|path| !path.as_os_str().is_empty() && path.is_dir()) {
+            command
+                .env("XRAY_LOCATION_ASSET", asset_dir)
+                .env("xray.location.asset", asset_dir)
+                .current_dir(asset_dir);
+        }
+    }
     if engine == "xray" && xray_legacy_cli {
         command.arg("-config").arg(&config_path);
     } else if engine == "xray" {
