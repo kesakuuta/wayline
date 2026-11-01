@@ -35,4 +35,5 @@
                 android:value="VPN tunnel managed by the user" />
         </service>
     </application>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 </manifest>

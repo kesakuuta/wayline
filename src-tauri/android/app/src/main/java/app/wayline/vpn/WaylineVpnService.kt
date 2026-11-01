@@ -39,7 +39,7 @@ class WaylineVpnService : VpnService() {
                     var bridge: LibboxBridge? = null
                     try {
                         if (config.isNullOrBlank()) throw IllegalArgumentException("Не передан sing-box config")
-                        if (mode == MODE_TUN && VpnService.prepare(this) != null) {
+                        if (VpnService.prepare(this) != null) {
                             throw IllegalStateException("Android не выдал разрешение VPN")
                         }
                         val activeBridge = LibboxBridge(this)
@@ -52,7 +52,7 @@ class WaylineVpnService : VpnService() {
                         }
                         startedAt = System.currentTimeMillis()
                         saveStatus(running = true, connecting = false, error = null, mode = mode)
-                        updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Локальный прокси запущен")
+                        updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Системный прокси активен")
                     } catch (error: Throwable) {
                         runCatching { bridge?.stop() }
                         if (engine === bridge) engine = null
@@ -73,6 +73,8 @@ class WaylineVpnService : VpnService() {
         }
         return START_NOT_STICKY
     }
+
+    internal fun isSystemProxyMode(): Boolean = currentMode == MODE_PROXY
 
     private fun stopVpn() {
         val active = engine

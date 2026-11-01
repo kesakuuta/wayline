@@ -112,6 +112,7 @@ impl Managed {
 pub fn stop_on_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<CoreState>() {
         if let Ok(mut managed) = state.0.lock() { managed.stop(); }
+        let _ = restore_system_proxy(app);
     }
 }
 
@@ -149,12 +150,114 @@ fn binary_path(engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
     Err(format!("Не найдено встроенное ядро {default_name}. Переустановите Wayline или проверьте комплектность сборки."))
 }
 
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x08000000);
+}
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
+
+fn proxy_backup_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    Ok(root.join("system-proxy-backup.json"))
+}
+fn proxy_command(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut command = Command::new(program); hide_console(&mut command);
+    command.args(args).output().map_err(|e| format!("{program}: {e}"))
+}
+#[cfg(windows)]
+fn notify_proxy_changed() {
+    #[link(name = "wininet")]
+    extern "system" { fn InternetSetOptionW(handle: *mut std::ffi::c_void, option: u32, buffer: *mut std::ffi::c_void, length: u32) -> i32; }
+    unsafe { let _ = InternetSetOptionW(std::ptr::null_mut(), 39, std::ptr::null_mut(), 0); let _ = InternetSetOptionW(std::ptr::null_mut(), 37, std::ptr::null_mut(), 0); }
+}
+#[cfg(windows)]
+fn set_system_proxy(app: &AppHandle, port: u16, engine: &str) -> Result<(), String> {
+    const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    let path = proxy_backup_path(app)?;
+    if !path.exists() {
+        let mut saved = serde_json::Map::new();
+        for name in ["ProxyEnable", "ProxyServer", "ProxyOverride"] {
+            let value = proxy_command("reg", &["query", KEY, "/v", name]).ok().filter(|o| o.status.success()).and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.contains(name)).and_then(|l| l.split_whitespace().nth(2).map(str::to_string)));
+            saved.insert(name.into(), value.map(Value::String).unwrap_or(Value::Null));
+        }
+        write_private(&path, &serde_json::to_vec_pretty(&Value::Object(saved)).map_err(|e| e.to_string())?)?;
+    }
+    let proxy = if engine == "xray" { format!("socks=127.0.0.1:{port}") } else { format!("127.0.0.1:{port}") };
+    for (name, kind, value) in [("ProxyEnable", "REG_DWORD", "1"), ("ProxyServer", "REG_SZ", proxy.as_str()), ("ProxyOverride", "REG_SZ", "<local>;localhost;127.*")] {
+        let out = proxy_command("reg", &["add", KEY, "/v", name, "/t", kind, "/d", value, "/f"])?;
+        if !out.status.success() { return Err(format!("Не удалось включить системный прокси Windows: {}", String::from_utf8_lossy(&out.stderr))); }
+    }
+    notify_proxy_changed(); Ok(())
+}
+#[cfg(windows)]
+fn restore_system_proxy(app: &AppHandle) -> Result<(), String> {
+    const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    let path = proxy_backup_path(app)?; if !path.exists() { return Ok(()); }
+    let saved: Value = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    for (name, kind) in [("ProxyEnable", "REG_DWORD"), ("ProxyServer", "REG_SZ"), ("ProxyOverride", "REG_SZ")] {
+        if let Some(value) = saved.get(name).and_then(Value::as_str) { let _ = proxy_command("reg", &["add", KEY, "/v", name, "/t", kind, "/d", value, "/f"])?; }
+        else { let _ = proxy_command("reg", &["delete", KEY, "/v", name, "/f"]); }
+    }
+    let _ = fs::remove_file(path); notify_proxy_changed(); Ok(())
+}
+#[cfg(target_os = "linux")]
+fn set_system_proxy(app: &AppHandle, port: u16, engine: &str) -> Result<(), String> {
+    const SCHEMA: &str = "org.gnome.system.proxy";
+    let keys = ["mode","http.host","http.port","https.host","https.port","socks.host","socks.port"];
+    let path = proxy_backup_path(app)?;
+    if !path.exists() {
+        let mut saved = serde_json::Map::new();
+        for key in keys { let out = proxy_command("gsettings", &["get", SCHEMA, key])?; if !out.status.success() { return Err("Не удалось прочитать GNOME Proxy".into()); } saved.insert(key.into(), Value::String(String::from_utf8_lossy(&out.stdout).trim().into())); }
+        write_private(&path, &serde_json::to_vec_pretty(&Value::Object(saved)).map_err(|e| e.to_string())?)?;
+    }
+    let socks_only = engine == "xray";
+    let values = [("mode","'manual'".to_string()),("http.host",if socks_only{"''".into()}else{"'127.0.0.1'".into()}),("http.port",if socks_only{"0".into()}else{port.to_string()}),("https.host",if socks_only{"''".into()}else{"'127.0.0.1'".into()}),("https.port",if socks_only{"0".into()}else{port.to_string()}),("socks.host","'127.0.0.1'".into()),("socks.port",port.to_string())];
+    for (key,value) in values { let out=proxy_command("gsettings",&["set",SCHEMA,key,&value])?; if !out.status.success(){return Err(format!("Не удалось настроить GNOME Proxy ({key})"));} }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn restore_system_proxy(app: &AppHandle) -> Result<(), String> {
+    const SCHEMA: &str = "org.gnome.system.proxy"; let path=proxy_backup_path(app)?; if !path.exists(){return Ok(());}
+    let saved:Value=serde_json::from_slice(&fs::read(&path).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    for key in ["mode","http.host","http.port","https.host","https.port","socks.host","socks.port"] { if let Some(value)=saved.get(key).and_then(Value::as_str){let out=proxy_command("gsettings",&["set",SCHEMA,key,value])?;if !out.status.success(){return Err(format!("Не удалось восстановить GNOME Proxy ({key})"));}} }
+    let _=fs::remove_file(path); Ok(())
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn set_system_proxy(_app:&AppHandle,_port:u16,_engine:&str)->Result<(),String>{Err("Автоматический системный прокси поддерживается на Windows и GNOME Linux. На этой платформе используйте TUN.".into())}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn restore_system_proxy(_app:&AppHandle)->Result<(),String>{Ok(())}
+pub fn restore_system_proxy_on_start(app:&AppHandle)->Result<(),String>{restore_system_proxy(app)}
+
+#[tauri::command]
+pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
+    if host.is_empty() || host.chars().any(|c| c.is_control()) || port == 0 {
+        return Err("Некорректный адрес или порт сервера".into());
+    }
+    let address = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?
+        .next().ok_or_else(|| "Адрес сервера не разрешился".to_string())?;
+    let started = Instant::now();
+    TcpStream::connect_timeout(&address, Duration::from_secs(3))
+        .map_err(|e| format!("TCP: {e}"))?;
+    Ok(started.elapsed().as_millis().min(u64::MAX as u128) as u64)
+}
+
 fn open_port() -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("Локальный порт: {e}"))?;
     listener.local_addr().map(|addr| addr.port()).map_err(|e| e.to_string())
 }
 
-fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value, String> {
+fn routing_domains(settings: &Value, key: &str) -> Vec<String> {
+    settings.get(key).and_then(Value::as_str).unwrap_or("")
+        .split(|c: char| c == '\n' || c == ',' || c == ';')
+        .map(str::trim).map(|s| s.trim_start_matches('.'))
+        .filter(|s| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control()))
+        .map(str::to_string).collect()
+}
+
+fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value) -> Result<Value, String> {
     const SUPPORTED: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls", "socks", "http"];
     let obj = outbound.as_object().ok_or("Некорректный outbound JSON")?;
     let protocol = obj.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
@@ -176,28 +279,51 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value
             "auto_redirect":cfg!(target_os="linux")
         }));
     }
+    let enabled = routing.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
+    if enabled && routing.get("mode").and_then(Value::as_str).unwrap_or("rule") == "rule" && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) {
+        rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
+    }
+    let mut rule_sets = Vec::<Value>::new();
+    if enabled && routing.get("mode").and_then(Value::as_str).unwrap_or("rule") == "rule" {
+        for (key, outbound_tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "reject")] {
+            let values = routing_domains(routing, key);
+            let mut suffixes = Vec::<String>::new(); let mut tags = Vec::<String>::new();
+            for value in values {
+                if let Some(tag) = value.strip_prefix("geosite:") {
+                    let rule_tag = format!("geosite-{}", tag.to_lowercase()); tags.push(rule_tag.clone());
+                    if !rule_sets.iter().any(|entry| entry["tag"] == rule_tag) { rule_sets.push(json!({"type":"remote","tag":rule_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/{rule_tag}.srs"),"download_detour":"proxy"})); }
+                } else if let Some(tag) = value.strip_prefix("geoip:") {
+                    let rule_tag = format!("geoip-{}", tag.to_lowercase()); tags.push(rule_tag.clone());
+                    if !rule_sets.iter().any(|entry| entry["tag"] == rule_tag) { rule_sets.push(json!({"type":"remote","tag":rule_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{rule_tag}.srs"),"download_detour":"proxy"})); }
+                } else { suffixes.push(value); }
+            }
+            if !suffixes.is_empty() { if outbound_tag == "reject" { rules.push(json!({"domain_suffix":suffixes,"action":"reject"})); } else { rules.push(json!({"domain_suffix":suffixes,"action":"route","outbound":outbound_tag})); } }
+            if !tags.is_empty() { if outbound_tag == "reject" { rules.push(json!({"rule_set":tags,"action":"reject"})); } else { rules.push(json!({"rule_set":tags,"action":"route","outbound":outbound_tag})); } }
+        }
+        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) {
+            let tag = "geosite-category-ads-all";
+            rule_sets.push(json!({"type":"remote","tag":tag,"format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"proxy"}));
+            rules.push(json!({"rule_set":[tag],"action":"reject"}));
+        }
+    }
+    let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
+    let dns_ip = match dns_server { "google" => "8.8.8.8", "quad9" => "9.9.9.9", _ => "1.1.1.1" };
+    let mut dns_servers = vec![json!({"type":"local","tag":"bootstrap"})];
+    if dns_server == "system" { dns_servers.push(json!({"type":"local","tag":"remote"})); }
+    else { dns_servers.push(json!({"type":"https","tag":"remote","server":dns_ip,"detour":"proxy"})); }
+    let final_outbound = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
     Ok(json!({
         "log":{"level":"info","timestamp":true},
-        "dns":{
-            "servers":[
-                {"type":"local","tag":"bootstrap"},
-                {"type":"udp","tag":"remote","server":"1.1.1.1","detour":"proxy"}
-            ],
-            "final":"remote", "strategy":"ipv4_only"
-        },
+        "dns":{"servers":dns_servers,"final":"remote","strategy":routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4")},
         "inbounds":inbounds,
         "outbounds":[outbound,{"type":"direct","tag":"direct"}],
-        "route":{
-            "auto_detect_interface":true,
-            "default_domain_resolver":{"server":"bootstrap"},
-            "final":"proxy",
-            "rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"ip_is_private":true,"action":"route","outbound":"direct"}]
-        }
+        "route":{"auto_detect_interface":true,"default_domain_resolver":{"server":"bootstrap"},"rule_set":rule_sets,"final":final_outbound,"rules":rules}
     }))
 }
 
 
-fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
+fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Value, String> {
     let protocol = outbound.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
     let server = outbound.get("server").and_then(Value::as_str).unwrap_or("");
     let server_port = outbound.get("server_port").and_then(Value::as_u64).unwrap_or(0);
@@ -270,11 +396,34 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
         "hysteria2" | "tuic" | "anytls" => return Err(format!("Протокол {protocol} не поддерживается Xray-core. Выберите sing-box.")),
         other => return Err(format!("Протокол {other} не поддерживается Xray-адаптером")),
     };
+    let enabled = routing.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let mut rules = Vec::<Value>::new();
+    if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) { rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"})); }
+    if enabled {
+        for (key, tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "block")] {
+            let mut domains = Vec::<String>::new(); let mut ips = Vec::<String>::new();
+            for value in routing_domains(routing, key) {
+                if value.starts_with("geoip:") { ips.push(value); }
+                else if value.starts_with("geosite:") || value.starts_with("domain:") { domains.push(value); }
+                else { domains.push(format!("domain:{value}")); }
+            }
+            if !domains.is_empty() && !ips.is_empty() { rules.push(json!({"type":"field","domain":domains,"ip":ips,"outboundTag":tag})); }
+            else if !domains.is_empty() { rules.push(json!({"type":"field","domain":domains,"outboundTag":tag})); }
+            else if !ips.is_empty() { rules.push(json!({"type":"field","ip":ips,"outboundTag":tag})); }
+        }
+        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { rules.push(json!({"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block"})); }
+    }
+    let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
+    let dns_address = match dns_server { "google" => "https://8.8.8.8/dns-query", "quad9" => "https://9.9.9.9/dns-query", "system" => "localhost", _ => "https://1.1.1.1/dns-query" };
+    let final_tag = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
+    rules.push(json!({"type":"field","network":"tcp,udp","outboundTag":final_tag}));
+    let dns_strategy = match routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("ipv4_only") { "prefer_ipv6" => "UseIPv6", "prefer_ipv4" => "UseIP", _ => "UseIPv4" };
     Ok(json!({
         "log":{"loglevel":"warning"},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
-        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"}],
-        "routing":{"domainStrategy":"AsIs","rules":[]}
+        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block","settings":{"response":{"type":"http"}}}],
+        "dns":{"servers":[dns_address,"localhost"],"queryStrategy":dns_strategy},
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules}
     }))
 }
 
@@ -312,6 +461,7 @@ fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Optio
 
     for (arguments, legacy_cli) in attempts {
         let mut command = Command::new(binary);
+        hide_console(&mut command);
         for argument in arguments {
             command.arg(argument);
         }
@@ -389,6 +539,7 @@ fn verify_socks(port: u16) -> Result<(), String> {
 pub struct SubscriptionFetch {
     content: String,
     title: Option<String>,
+    expires_at: Option<u64>,
 }
 
 /// HTTPS subscription import with TLS verification and a strict response size cap.
@@ -428,40 +579,33 @@ pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
             .and_then(|value| value.split("filename=").nth(1))
             .map(|value| value.trim_matches('"').trim_matches(';').trim().to_string())
             .filter(|value| !value.is_empty()));
+    let expires_at = response.headers().get("subscription-userinfo")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').find_map(|part| {
+            let mut pair = part.trim().splitn(2, '=');
+            if pair.next()? == "expire" { pair.next()?.parse::<u64>().ok() } else { None }
+        }));
     let mut bytes = Vec::new();
     response.take((MAX_SIZE + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_SIZE { return Err("Подписка превышает 2 МБ".into()); }
     let content = String::from_utf8(bytes).map_err(|_| "Ответ подписки не UTF-8".to_string())?;
-    Ok(SubscriptionFetch { content, title })
-}
-
-
-#[tauri::command]
-pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
-    if host.trim().is_empty() || host.len() > 253 || host.chars().any(char::is_control) || port == 0 {
-        return Err("Некорректный адрес сервера".into());
-    }
-    let addresses = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?;
-    let started = Instant::now();
-    for address in addresses.take(8) {
-        if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok() {
-            return Ok(started.elapsed().as_millis() as u64);
-        }
-    }
-    Err("Сервер не ответил на TCP-проверку".into())
+    Ok(SubscriptionFetch { content, title, expires_at })
 }
 
 #[tauri::command]
-pub fn core_status(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
+pub fn core_status(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
-    Ok(managed.status())
+    let status = managed.status();
+    if !status.running { let _ = restore_system_proxy(&app); }
+    Ok(status)
 }
 
 #[tauri::command]
-pub fn core_disconnect(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
+pub fn core_disconnect(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.stop();
     managed.last_error = None;
+    restore_system_proxy(&app)?;
     Ok(managed.status())
 }
 
@@ -471,19 +615,67 @@ pub fn core_log(state: State<'_, CoreState>) -> Result<String, String> {
     Ok(read_log(managed.log.as_deref()))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo { name: String, path: String, created_at: u64, size: u64 }
+
+fn backup_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("backups");
+    fs::create_dir_all(&root).map_err(|e| format!("Папка резервных копий: {e}"))?;
+    Ok(root)
+}
+
 #[tauri::command]
-pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String) -> Result<CoreStatus, String> {
+pub fn backup_list(app: AppHandle) -> Result<Vec<BackupInfo>, String> {
+    let directory = backup_directory(&app)?;
+    let mut items = Vec::new();
+    for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        let created_at = metadata.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        items.push(BackupInfo { name: entry.file_name().to_string_lossy().into_owned(), path: path.to_string_lossy().into_owned(), created_at, size: metadata.len() });
+    }
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(items)
+}
+
+#[tauri::command]
+pub fn backup_create(app: AppHandle, data: Value) -> Result<BackupInfo, String> {
+    let directory = backup_directory(&app)?;
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+    let name = format!("wayline-backup-{timestamp}.json");
+    let path = directory.join(&name);
+    let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+    write_private(&path, &bytes)?;
+    Ok(BackupInfo { name, path: path.to_string_lossy().into_owned(), created_at: timestamp, size: bytes.len() as u64 })
+}
+
+#[tauri::command]
+pub fn backup_restore(app: AppHandle, name: String) -> Result<Value, String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\\\') || !name.ends_with(".json") || name.chars().any(|c| c.is_control()) {
+        return Err("Некорректное имя резервной копии".into());
+    }
+    let path = backup_directory(&app)?.join(name);
+    let bytes = fs::read(path).map_err(|e| format!("Не удалось прочитать резервную копию: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("Повреждённая резервная копия: {e}"))
+}
+
+#[tauri::command]
+pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String, routing: Value) -> Result<CoreStatus, String> {
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
     if engine != "xray" && engine != "sing-box" { return Err("Неизвестное ядро".into()); }
     if engine == "xray" && mode == "tun" { return Err("Xray в Wayline пока работает в режиме локального SOCKS-прокси. Для TUN выберите sing-box.".into()); }
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.refresh();
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
+    restore_system_proxy(&app)?;
     managed.last_error = None;
 
     let binary = binary_path(&engine, &app)?;
     let port = open_port()?;
-    let config = if engine == "xray" { create_xray_config(outbound, port)? } else { create_singbox_config(outbound, &mode, port)? };
+    let config = if engine == "xray" { create_xray_config(outbound, port, &routing)? } else { create_singbox_config(outbound, &mode, port, &routing)? };
     let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let config_path = dir.join(if engine == "xray" { "active-xray.json" } else { "active-sing-box.json" });
@@ -496,7 +688,9 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
             Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Проверьте целостность установки и наличие встроенного ядра.", binary.display())); }
         }
     } else {
-        let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
+        let mut check = Command::new(&binary);
+        hide_console(&mut check);
+        let output = check.arg("check").arg("-c").arg(&config_path).output()
             .map_err(|err| format!("Не удалось запустить sing-box ({}): {err}", binary.display()))?;
         (Some(output), false)
     };
@@ -509,7 +703,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(&binary);
-    #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
+    hide_console(&mut command);
     if engine == "xray" {
         // Xray resolves geoip.dat/geosite.dat relative to its asset directory.
         // Packaged builds keep the data files beside the executable in resources.
@@ -557,6 +751,9 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     // Process can be running when server is temporarily unavailable. Do not call that 'connected'.
     managed.verification = Some(if result.is_ok() { "verified" } else { "unverified" }.into());
     if let Err(error) = result { managed.last_error = Some(format!("Ядро работает, но удалённое TCP-соединение не подтверждено: {error}")); }
+    if managed.mode.as_deref() == Some("proxy") {
+        if let Err(error) = set_system_proxy(&app, port, &engine) { managed.stop(); managed.last_error = Some(error.clone()); return Err(error); }
+    }
     Ok(managed.status())
 }
 
@@ -579,7 +776,7 @@ mod tests {
 
     #[test]
     fn tun_route_and_remote_are_generated() {
-        let cfg = create_singbox_config(json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}), "tun", 2080).unwrap();
+        let cfg = create_singbox_config(json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}), "tun", 2080, &json!({})).unwrap();
         assert_eq!(cfg["inbounds"][1]["type"], "tun");
         assert_eq!(cfg["inbounds"][1]["auto_route"], true);
         assert_eq!(cfg["outbounds"][0]["server"], "vpn.example.com");
@@ -590,7 +787,7 @@ mod tests {
     #[test]
     fn xray_generates_vless_reality_socks_config() {
         let outbound = json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"1234","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"example.com","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"pub","short_id":"abcd"}}});
-        let cfg = create_xray_config(outbound, 2080).unwrap();
+        let cfg = create_xray_config(outbound, 2080, &json!({})).unwrap();
         assert_eq!(cfg["outbounds"][0]["protocol"], "vless");
         assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["address"], "vpn.example.com");
         assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"], "1234");
@@ -603,16 +800,16 @@ mod tests {
     #[test]
     fn xray_rejects_hysteria2() {
         let outbound = json!({"type":"hysteria2","server":"vpn.example.com","server_port":443,"password":"secret"});
-        assert!(create_xray_config(outbound, 2080).is_err());
+        assert!(create_xray_config(outbound, 2080, &json!({})).is_err());
     }
     #[test]
     fn rejects_bad_servers() {
-        assert!(create_singbox_config(json!({"type":"vless","server":"","server_port":443}), "tun", 2080).is_err());
-        assert!(create_singbox_config(json!({"type":"direct","server":"vpn.example.com","server_port":443}), "tun", 2080).is_err());
+        assert!(create_singbox_config(json!({"type":"vless","server":"","server_port":443}), "tun", 2080, &json!({})).is_err());
+        assert!(create_singbox_config(json!({"type":"direct","server":"vpn.example.com","server_port":443}), "tun", 2080, &json!({})).is_err());
     }
     #[test]
     fn local_mode_is_not_tun() {
-        let cfg = create_singbox_config(json!({"type":"trojan","server":"vpn.example.com","server_port":443}), "proxy", 2080).unwrap();
+        let cfg = create_singbox_config(json!({"type":"trojan","server":"vpn.example.com","server_port":443}), "proxy", 2080, &json!({})).unwrap();
         assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
     }
 }

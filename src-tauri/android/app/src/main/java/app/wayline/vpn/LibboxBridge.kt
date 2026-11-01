@@ -1,11 +1,14 @@
 package app.wayline.vpn
 
 import android.net.ConnectivityManager
+import android.content.Context
+import java.net.InetSocketAddress
 import android.net.IpPrefix
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
+import android.net.ProxyInfo
 import android.util.Log
 import android.os.Build
 import android.os.Handler
@@ -80,7 +83,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     null
                 }
                 "opentun" -> { val fd = openTun(args?.getOrNull(0) ?: error("Libbox не передал TunOptions")); if (method.returnType == java.lang.Long.TYPE || method.returnType == java.lang.Long::class.java) fd.toLong() else fd }
-                "useprocfs", "undernetworkextension", "includeallnetworks" -> false
+                "useprocfs" -> Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                "undernetworkextension", "includeallnetworks" -> false
                 "getinterfaces" -> networkInterfaces(loader)
                 "startdefaultinterfacemonitor" -> {
                     args?.getOrNull(0)?.let { startDefaultInterfaceMonitor(it) }
@@ -91,7 +95,11 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     null
                 }
                 "cleardnscache", "registermyinterface", "startneighbormonitor", "closeneighbormonitor" -> null
-                "findconnectionowner", "localdnstransport", "readwifistate" -> null
+                "findconnectionowner" -> findConnectionOwner(args)
+                "packagenamebyuid" -> packageNameByUid((args?.getOrNull(0) as? Number)?.toInt() ?: -1)
+                "uidbypackagename" -> uidByPackageName(args?.getOrNull(0)?.toString().orEmpty())
+                "localdnstransport" -> null
+                "readwifistate" -> readWifiState()
                 "systemcertificates" -> iteratorProxy(loader, "StringIterator", emptyList())
                 "sendnotification" -> null
                 else -> defaultValue(method.returnType)
@@ -154,15 +162,47 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         }
     }
 
+    private fun findConnectionOwner(args: Array<out Any?>?): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return -1
+        return runCatching {
+            val protocol = (args?.getOrNull(0) as? Number)?.toInt() ?: return -1
+            val sourceIp = args.getOrNull(1)?.toString() ?: return -1
+            val sourcePort = (args.getOrNull(2) as? Number)?.toInt() ?: return -1
+            val destinationIp = args.getOrNull(3)?.toString() ?: return -1
+            val destinationPort = (args.getOrNull(4) as? Number)?.toInt() ?: return -1
+            val connectivity = service.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivity.getConnectionOwnerUid(protocol, InetSocketAddress(sourceIp, sourcePort), InetSocketAddress(destinationIp, destinationPort))
+        }.getOrDefault(-1)
+    }
+
+    private fun packageNameByUid(uid: Int): String {
+        if (uid <= 1000) return "android"
+        return service.packageManager.getPackagesForUid(uid)?.firstOrNull() ?: "android"
+    }
+
+    private fun uidByPackageName(packageName: String): Int {
+        if (packageName.isBlank()) return -1
+        return runCatching { service.packageManager.getApplicationInfo(packageName, 0).uid }.getOrDefault(-1)
+    }
+
+    private fun readWifiState(): String = runCatching {
+        val manager = service.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        val info = manager.connectionInfo
+        "${info.ssid},${info.bssid}"
+    }.getOrDefault("")
+
     private fun openTun(options: Any): Int {
         if (VpnService.prepare(service) != null) {
             throw IllegalStateException("Android VPN permission has not been granted")
         }
         closeTun()
-        val builder = service.Builder().setSession("Wayline VPN")
+        val builder = service.Builder().setSession("Wayline")
         val mtu = call(options, "getMtu") as? Number
         if (mtu != null && mtu.toInt() > 0) builder.setMtu(mtu.toInt())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+            if (service.isSystemProxyMode()) builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", 2080))
+        }
 
         val ipv4AddressCount = addAddressList(builder, options, "getInet4Address")
         val ipv6AddressCount = addAddressList(builder, options, "getInet6Address")
