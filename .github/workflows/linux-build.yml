@@ -58,10 +58,24 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build Linux packages
         run: npm run tauri build -- --bundles deb,appimage
+      - name: Prepare portable ZIP
+        run: |
+          set -euo pipefail
+          mkdir -p wayline-linux-portable
+          APPIMAGE="$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' | head -n 1)"
+          test -n "$APPIMAGE"
+          cp "$APPIMAGE" wayline-linux-portable/Wayline-x86_64.AppImage
+          cp README.md wayline-linux-portable/README.md
+          (cd wayline-linux-portable && zip -9 ../wayline-linux-x86_64-portable.zip ./*)
       - uses: actions/upload-artifact@v4
         with:
           name: wayline-linux-x86_64
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wayline-linux-x86_64-portable
+          path: wayline-linux-x86_64-portable.zip
           if-no-files-found: error

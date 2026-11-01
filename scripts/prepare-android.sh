@@ -20,6 +20,15 @@ if [ ! -d src-tauri/gen/android ]; then
   fi
 fi
 
+# Generate the same icon set for Android from the desktop source icon.
+if [ -f src-tauri/icons/icon.png ]; then
+  if command -v cargo >/dev/null 2>&1 && cargo tauri --help >/dev/null 2>&1; then
+    cargo tauri icon src-tauri/icons/icon.png
+  elif npx --no-install tauri --help >/dev/null 2>&1; then
+    npx --no-install tauri icon src-tauri/icons/icon.png
+  fi
+fi
+
 GEN="src-tauri/gen/android/app/src/main"
 PKG="$GEN/java/app/wayline/vpn"
 mkdir -p "$PKG" "$GEN/res/values"
