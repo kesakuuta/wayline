@@ -445,6 +445,7 @@ fn verify_socks(port: u16) -> Result<(), String> {
 pub struct SubscriptionFetch {
     content: String,
     title: Option<String>,
+    expires_at: Option<u64>,
 }
 
 /// HTTPS subscription import with TLS verification and a strict response size cap.
@@ -484,11 +485,17 @@ pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
             .and_then(|value| value.split("filename=").nth(1))
             .map(|value| value.trim_matches('"').trim_matches(';').trim().to_string())
             .filter(|value| !value.is_empty()));
+    let expires_at = response.headers().get("subscription-userinfo")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').find_map(|part| {
+            let mut pair = part.trim().splitn(2, '=');
+            if pair.next()? == "expire" { pair.next()?.parse::<u64>().ok() } else { None }
+        }));
     let mut bytes = Vec::new();
     response.take((MAX_SIZE + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_SIZE { return Err("Подписка превышает 2 МБ".into()); }
     let content = String::from_utf8(bytes).map_err(|_| "Ответ подписки не UTF-8".to_string())?;
-    Ok(SubscriptionFetch { content, title })
+    Ok(SubscriptionFetch { content, title, expires_at })
 }
 
 #[tauri::command]

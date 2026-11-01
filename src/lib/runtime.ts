@@ -129,12 +129,12 @@ export async function fetchSubscription(url: string): Promise<SubscriptionFetch>
     const result = JSON.parse(raw) as { content?: string; title?: string | null; error?: string };
     if (result.error) throw new Error(result.error);
     if (typeof result.content !== 'string') throw new Error('Ответ подписки пуст или повреждён.');
-    return { content: result.content, title: result.title ?? null };
+    return { content: result.content, title: result.title ?? null, expiresAt: result.expiresAt ?? null };
   }
   requireDesktop();
   return invoke<SubscriptionFetch>('fetch_subscription', { url });
 }
-export type SubscriptionFetch = { content: string; title: string | null };
+export type SubscriptionFetch = { content: string; title: string | null; expiresAt?: number | null };
 export async function readClipboard(): Promise<string> {
   if (isAndroidNative()) {
     return window.WaylineAndroid?.readClipboard?.() ?? '';
