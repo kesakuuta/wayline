@@ -983,6 +983,54 @@ mod tests {
         assert_eq!(cfg["inbounds"][0]["port"], 2080);
     }
     #[test]
+    fn singbox_route_preferences_are_applied() {
+        let routing = json!({
+            "rulesEnabled": true,
+            "blockAds": false,
+            "bypassLan": true,
+            "policy": "direct",
+            "directDomains": "direct.example\nlocal.example",
+            "proxyDomains": "proxy.example",
+            "blockDomains": "blocked.example",
+            "dnsUrl": "https://dns.google/dns-query",
+            "dnsRoute": "direct",
+            "geoCountry": "fi"
+        });
+        let cfg = create_singbox_config(
+            json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}),
+            "tun", 2080, &routing
+        ).unwrap();
+        assert_eq!(cfg["route"]["final"], "direct");
+        assert_eq!(cfg["dns"]["servers"][1]["server"], "dns.google");
+        assert_eq!(cfg["dns"]["servers"][1]["detour"], "direct");
+        assert_eq!(cfg["route"]["rules"][2]["domain_suffix"][0], "blocked.example");
+        assert!(cfg["route"]["rule_set"].as_array().unwrap().iter().any(|set| set["tag"] == "geosite-fi"));
+        assert!(cfg["route"]["rule_set"].as_array().unwrap().iter().any(|set| set["tag"] == "geoip-fi"));
+    }
+
+    #[test]
+    fn xray_route_preferences_use_geodata_and_doh() {
+        let routing = json!({
+            "rulesEnabled": true,
+            "blockAds": false,
+            "bypassLan": true,
+            "policy": "direct",
+            "geoCountry": "fr",
+            "directDomains": "direct.example",
+            "dnsUrl": "https://cloudflare-dns.com/dns-query",
+            "dnsRoute": "direct"
+        });
+        let cfg = create_xray_config(
+            json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}),
+            2080, &routing
+        ).unwrap();
+        assert_eq!(cfg["outbounds"][0]["tag"], "direct");
+        assert_eq!(cfg["dns"]["servers"][0], "https+local://cloudflare-dns.com/dns-query");
+        assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["domain"][0] == "geosite:fr"));
+        assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["ip"][0] == "geoip:fr"));
+    }
+
+    #[test]
     fn xray_rejects_hysteria2() {
         let outbound = json!({"type":"hysteria2","server":"vpn.example.com","server_port":443,"password":"secret"});
         assert!(create_xray_config(outbound, 2080, &json!({})).is_err());
