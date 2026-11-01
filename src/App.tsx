@@ -101,9 +101,10 @@ export default function App(){
   if(busy||connecting)return;
   if(!isTauri()&&!isAndroidNative()) { message('Подключение работает только в нативной сборке, не в браузере.'); return; }
   if(!connected && !server?.outbound) { message('Импортируйте реальный сервер: VLESS, HY2, Trojan, VMess, SS или JSON-outbound sing-box.'); openImport(); return; }
-  setBusy(true);
+  const action=connected?'disconnect':'connect';
+  setBusy(true); setBusyAction(action);
   try {
-   const next=connected?await disconnect():await connect(server!.outbound!,coreMode,isAndroidNative()?'sing-box':coreEngine,routing);
+   const next=action==='disconnect'?await disconnect():await connect(server!.outbound!,coreMode,isAndroidNative()?'sing-box':coreEngine,routing);
    setNative(next);
    if(next.error) message(next.error);
    else if(next.running) message('Подключение установлено.');
