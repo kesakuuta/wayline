@@ -193,3 +193,10 @@ export async function takePendingConnection(): Promise<PendingConnection|null> {
   try { return await invoke<PendingConnection|null>('core_take_pending_connect'); }
   catch { return null; }
 }
+
+export type BackupInfo = { id:string; created_at:number; size:number };
+export async function backupDirectory():Promise<string> { return invoke<string>('core_backup_directory'); }
+export async function listBackups():Promise<BackupInfo[]> { return invoke<BackupInfo[]>('core_backup_list'); }
+export async function createBackup(data:Record<string,unknown>):Promise<BackupInfo> { return invoke<BackupInfo>('core_backup_create',{data}); }
+export async function restoreBackup(id:string):Promise<Record<string,unknown>> { return invoke<Record<string,unknown>>('core_backup_restore',{id}); }
+export async function deleteBackup(id:string):Promise<void> { return invoke<void>('core_backup_delete',{id}); }
