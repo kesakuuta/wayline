@@ -147,7 +147,7 @@ class WaylineVpnService : VpnService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Wayline VPN", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL_ID, "Wayline", NotificationManager.IMPORTANCE_LOW)
             )
         }
     }
