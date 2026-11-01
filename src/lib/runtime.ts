@@ -41,8 +41,7 @@ export async function status(): Promise<CoreStatus> {
 export async function connect(
   outbound: Record<string, unknown>,
   mode: CoreMode,
-  engine: CoreEngine,
-  binary: string
+  engine: CoreEngine
 ): Promise<CoreStatus> {
   if (isAndroidNative()) {
     const android = window.WaylineAndroid;
@@ -66,7 +65,10 @@ export async function connect(
     const config = {
       log: { level: 'info', timestamp: true },
       dns: {
-        servers: [{ type: 'udp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }],
+        servers: [
+          { type: 'local', tag: 'bootstrap' },
+          { type: 'udp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }
+        ],
         final: 'dns-remote',
         strategy: 'prefer_ipv4'
       },
@@ -74,8 +76,10 @@ export async function connect(
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: {
         auto_detect_interface: true,
+        default_domain_resolver: { server: 'bootstrap' },
         rules: [
           { action: 'sniff' },
+          { protocol: 'dns', action: 'hijack-dns' },
           { ip_is_private: true, action: 'route', outbound: 'direct' }
         ],
         final: 'proxy'
@@ -99,7 +103,7 @@ export async function connect(
     return current;
   }
   requireDesktop();
-  return invoke<CoreStatus>('core_connect', { outbound, mode, engine, binary });
+  return invoke<CoreStatus>('core_connect', { outbound, mode, engine });
 }
 export async function disconnect(): Promise<CoreStatus> {
   if (isAndroidNative()) {

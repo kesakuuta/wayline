@@ -39,7 +39,7 @@ const palette:Record<ThemeName,{primary:string;bg:string;surface:string;surface2
 export default function App(){
  const [appearance,setAppearance]=useState<Appearance>(loadAppearance);
  const [subs,setSubs]=useState<Subscription[]>(loadProfiles); const [activeSub,setActiveSub]=useState(()=>localStorage.getItem('wayline.active.profile') || 'local'); const [selected,setSelected]=useState('');
- const [importText,setImportText]=useState(''); const [native,setNative]=useState<CoreStatus|null>(null); const [busy,setBusy]=useState(false); const [coreEngine,setCoreEngine]=useState<CoreEngine>(()=>isAndroidNative()?'sing-box':(localStorage.getItem('wayline.core.engine')==='xray'?'xray':'sing-box')); const [coreMode,setCoreMode]=useState<CoreMode>(()=>isAndroidNative()?(localStorage.getItem('wayline.core.mode')==='proxy'?'proxy':'tun'):(localStorage.getItem('wayline.core.mode')==='proxy'?'proxy':(localStorage.getItem('wayline.core.engine')==='xray'?'proxy':'tun'))); const [xrayBinary,setXrayBinary]=useState(''); const [singBoxBinary,setSingBoxBinary]=useState(''); const coreBinary=coreEngine==='xray'?xrayBinary:singBoxBinary; const [logText,setLogText]=useState('');
+ const [importText,setImportText]=useState(''); const [native,setNative]=useState<CoreStatus|null>(null); const [busy,setBusy]=useState(false); const [coreEngine,setCoreEngine]=useState<CoreEngine>(()=>isAndroidNative()?'sing-box':(localStorage.getItem('wayline.core.engine')==='xray'?'xray':'sing-box')); const [coreMode,setCoreMode]=useState<CoreMode>(()=>isAndroidNative()?(localStorage.getItem('wayline.core.mode')==='proxy'?'proxy':'tun'):(localStorage.getItem('wayline.core.mode')==='proxy'?'proxy':(localStorage.getItem('wayline.core.engine')==='xray'?'proxy':'tun'))); const [logText,setLogText]=useState('');
  const [query,setQuery]=useState(''); const [settings,setSettings]=useState(false); const [settingsTab,setSettingsTab]=useState('Внешний вид'); const [notice,setNotice]=useState(''); const [tabMenu,setTabMenu]=useState<string|null>(null); const [tabMenuPosition,setTabMenuPosition]=useState<{top:number;left:number}|null>(null); const [leftWidth,setLeftWidth]=useState(50); const [resizing,setResizing]=useState(false); const [newName,setNewName]=useState(''); const [showAdd,setShowAdd]=useState(false); const fileRef=useRef<HTMLInputElement>(null); const importTextRef=useRef<HTMLTextAreaElement>(null); const lastCoreError=useRef<string|null>(null);
  const sub=subs.find(s=>s.id===activeSub)??subs[0]; const server=sub?.servers.find(s=>s.id===selected)??sub?.servers[0];
  const connected=Boolean(native?.running);
@@ -105,7 +105,7 @@ export default function App(){
   if(!connected && !server?.outbound) { message('Импортируйте реальный сервер: VLESS, HY2, Trojan, VMess, SS или JSON-outbound sing-box.'); openImport(); return; }
   setBusy(true);
   try {
-   const next=connected?await disconnect():await connect(server!.outbound!,coreMode,isAndroidNative()?'sing-box':coreEngine,coreBinary);
+   const next=connected?await disconnect():await connect(server!.outbound!,coreMode,isAndroidNative()?'sing-box':coreEngine);
    setNative(next);
    if(next.error) message(next.error);
    else if(next.running) message('Подключение установлено.');

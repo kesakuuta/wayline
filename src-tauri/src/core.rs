@@ -115,7 +115,7 @@ pub fn stop_on_exit(app: &AppHandle) {
     }
 }
 
-fn binary_path(path: &str, engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
+fn binary_path(engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
     let default_name = match (engine, cfg!(windows)) {
         ("xray", true) => "xray.exe",
         ("xray", false) => "xray",
@@ -123,24 +123,30 @@ fn binary_path(path: &str, engine: &str, app: &AppHandle) -> Result<PathBuf, Str
         ("sing-box", false) => "sing-box",
         _ => return Err("Неизвестное сетевое ядро".into()),
     };
-    let requested = path.trim();
 
-    // Resolve the normal UI defaults to the copy packaged inside the application.
-    // A custom path remains user-controlled.
-    if requested.is_empty() || requested == default_name {
-        if let Ok(bundled) = app.path().resolve(
-            format!("binaries/{default_name}"),
-            tauri::path::BaseDirectory::Resource,
-        ) {
-            if bundled.is_file() {
-                return Ok(bundled);
-            }
-        }
-        return Ok(PathBuf::from(default_name));
+    // Release bundles place both engines under the Tauri resource directory.
+    if let Ok(bundled) = app.path().resolve(format!("binaries/{default_name}"), tauri::path::BaseDirectory::Resource) {
+        if bundled.is_file() { return Ok(bundled); }
     }
 
-    // Command::new never invokes a shell. Paths and arguments cannot inject shell commands.
-    Ok(PathBuf::from(requested))
+    // Development builds may run from an unpacked application directory.
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            for candidate in [directory.join("binaries").join(default_name), directory.join(default_name)] {
+                if candidate.is_file() { return Ok(candidate); }
+            }
+        }
+    }
+
+    // PATH is a development fallback; arbitrary UI-supplied paths are not accepted.
+    if let Some(search_path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&search_path) {
+            let candidate = directory.join(default_name);
+            if candidate.is_file() { return Ok(candidate); }
+        }
+    }
+
+    Err(format!("Не найдено встроенное ядро {default_name}. Переустановите Wayline или проверьте комплектность сборки."))
 }
 
 fn open_port() -> Result<u16, String> {
@@ -450,7 +456,7 @@ pub fn core_log(state: State<'_, CoreState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String, binary: String) -> Result<CoreStatus, String> {
+pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String) -> Result<CoreStatus, String> {
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
     if engine != "xray" && engine != "sing-box" { return Err("Неизвестное ядро".into()); }
     if engine == "xray" && mode == "tun" { return Err("Xray в Wayline пока работает в режиме локального SOCKS-прокси. Для TUN выберите sing-box.".into()); }
@@ -459,7 +465,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
     managed.last_error = None;
 
-    let binary = binary_path(&binary, &engine, &app)?;
+    let binary = binary_path(&engine, &app)?;
     let port = open_port()?;
     let config = if engine == "xray" { create_xray_config(outbound, port)? } else { create_singbox_config(outbound, &mode, port)? };
     let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;

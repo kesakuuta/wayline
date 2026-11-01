@@ -59,7 +59,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                 val setup = libbox.methods.firstOrNull {
                     it.name.equals("setup", true) && it.parameterTypes.size == 1 &&
                         it.parameterTypes[0].isAssignableFrom(setupOptionsType)
-                } ?: throw IllegalStateException("В libbox 1.14.0 не найден Libbox.setup(SetupOptions)")
+                } ?: throw IllegalStateException("В libbox не найден Libbox.setup(SetupOptions)")
                 invoke(setup, null, setupOptions)
                 setupComplete = true
             }
@@ -79,7 +79,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     if (!service.protect(fd)) throw IllegalStateException("Не удалось исключить сокет sing-box из VPN")
                     null
                 }
-                "opentun" -> openTun(args?.getOrNull(0) ?: error("Libbox не передал TunOptions"))
+                "opentun" -> { val fd = openTun(args?.getOrNull(0) ?: error("Libbox не передал TunOptions")); if (method.returnType == java.lang.Long.TYPE || method.returnType == java.lang.Long::class.java) fd.toLong() else fd }
                 "useprocfs", "undernetworkextension", "includeallnetworks" -> false
                 "getinterfaces" -> networkInterfaces(loader)
                 "startdefaultinterfacemonitor" -> {
@@ -453,8 +453,12 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
     private fun defaultValue(type: Class<*>): Any? = when (type) {
         java.lang.Boolean.TYPE -> false
-        java.lang.Integer.TYPE, java.lang.Long.TYPE, java.lang.Short.TYPE, java.lang.Byte.TYPE -> 0
-        java.lang.Float.TYPE, java.lang.Double.TYPE -> 0.0
+        java.lang.Integer.TYPE -> 0
+        java.lang.Long.TYPE -> 0L
+        java.lang.Short.TYPE -> 0.toShort()
+        java.lang.Byte.TYPE -> 0.toByte()
+        java.lang.Float.TYPE -> 0.0f
+        java.lang.Double.TYPE -> 0.0
         else -> null
     }
 

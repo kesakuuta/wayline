@@ -15,6 +15,8 @@ Xray's TUN mode is deliberately unavailable in this build. A running local SOCKS
 
 Release builds bundle the official Xray-core and sing-box executables for the target platform. Wayline resolves them from the application resources automatically; no executable path needs to be entered in Settings.
 
+Wayline resolves bundled engines automatically; no executable path is shown in Settings or required from the user. Release workflows download official, checksum-verified Xray-core and sing-box archives and package the matching executables together with Xray's `geoip.dat` and `geosite.dat` assets.
+
 For a development build, place the matching official executables in `src-tauri/binaries/` or make them available in `PATH`:
 
 - Xray-core: https://github.com/XTLS/Xray-core/releases
@@ -46,7 +48,7 @@ For a release build:
 npm run tauri build
 ```
 
-On Linux, install the Tauri system dependencies first. On Windows, install the Visual Studio C++ build tools and WebView2 runtime as required by Tauri.
+On Linux, install the Tauri system dependencies first. A Linux TUN connection also needs network-administration privileges (normally CAP_NET_ADMIN); if Wayline cannot create the TUN interface or routes, launch it from an authorized desktop session or grant the required capability to the packaged application. On Windows, install the Visual Studio C++ build tools and WebView2 runtime as required by Tauri.
 
 ## Android project preparation
 
