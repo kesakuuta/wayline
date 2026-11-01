@@ -33,6 +33,7 @@ function androidStatus(): CoreStatus {
   if (!window.WaylineAndroid) throw new Error('Нативный Android-модуль Wayline не найден. Пересоберите приложение.');
   return JSON.parse(window.WaylineAndroid.status()) as CoreStatus;
 }
+export async function pingServer(host: string, port: number): Promise<number> { if (isAndroidNative()) throw new Error('TCP ping is not available in the Android bridge yet.'); requireDesktop(); return invoke<number>('core_ping', { host, port }); }
 export async function status(): Promise<CoreStatus> {
   if (isAndroidNative()) return androidStatus();
   requireDesktop();
