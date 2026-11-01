@@ -208,7 +208,8 @@ fn run_hidden_powershell(script: &str, backup: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn enable_windows_system_proxy(port: u16, backup: &Path) -> Result<(), String> {
+fn enable_windows_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(), String> {
+    let proxy_server = if engine == "xray" { format!("socks=127.0.0.1:{port}") } else { format!("http=127.0.0.1:{port};https=127.0.0.1:{port};socks=127.0.0.1:{port}") };
     let script = format!(r#"
 $ErrorActionPreference = 'Stop'
 $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
@@ -227,7 +228,7 @@ if (-not (Test-Path $env:WAYLINE_PROXY_BACKUP)) {{
   $s | ConvertTo-Json | Set-Content -LiteralPath $env:WAYLINE_PROXY_BACKUP -Encoding UTF8
 }}
 Set-ItemProperty -Path $p -Name ProxyEnable -Type DWord -Value 1
-Set-ItemProperty -Path $p -Name ProxyServer -Type String -Value 'http=127.0.0.1:{port};https=127.0.0.1:{port};socks=127.0.0.1:{port}'
+Set-ItemProperty -Path $p -Name ProxyServer -Type String -Value '{proxy_server}'
 Set-ItemProperty -Path $p -Name ProxyOverride -Type String -Value 'localhost;127.*;10.*;172.16.*;192.168.*;<local>'
 Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WaylineWinInet {{ [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l); }}' -ErrorAction SilentlyContinue
 [WaylineWinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
@@ -259,7 +260,7 @@ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; pu
 }
 
 #[cfg(not(windows))]
-fn enable_windows_system_proxy(_port: u16, _backup: &Path) -> Result<(), String> { Ok(()) }
+fn enable_windows_system_proxy(_port: u16, _engine: &str, _backup: &Path) -> Result<(), String> { Ok(()) }
 
 #[cfg(not(windows))]
 fn restore_windows_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
@@ -570,8 +571,14 @@ pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub fn core_status(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
-    let mut managed = state.0.lock().map_err(|e| e.to_string())?;
+pub fn core_status(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
+    let managed = state.0.lock().map_err(|e| e.to_string())?;
+    if managed.child.is_none() {
+        if let Ok(data_dir) = app.path().app_local_data_dir() {
+            let stale_backup = data_dir.join("proxy-previous.json");
+            if stale_backup.is_file() { let _ = restore_windows_system_proxy(&stale_backup); }
+        }
+    }
     Ok(managed.status())
 }
 
@@ -682,8 +689,8 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     managed.verification = Some(if result.is_ok() { "verified" } else { "unverified" }.into());
     if result.is_ok() && mode == "proxy" && cfg!(windows) {
         let backup = dir.join("proxy-previous.json");
-        if let Err(error) = enable_windows_system_proxy(port, &backup) { managed.stop(); return Err(error); }
-        managed.proxy_backup = Some(backup);
+        managed.proxy_backup = Some(backup.clone());
+        if let Err(error) = enable_windows_system_proxy(port, &engine, &backup) { managed.stop(); return Err(error); }
     }
     if let Err(error) = result { managed.last_error = Some(format!("Ядро работает, но удалённое TCP-соединение не подтверждено: {error}")); }
     Ok(managed.status())
