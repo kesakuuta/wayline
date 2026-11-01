@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
+import android.net.wifi.WifiManager
 import android.util.Log
 import android.os.Build
 import android.os.Handler
@@ -15,6 +16,7 @@ import android.system.OsConstants
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Proxy
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 
 /**
@@ -80,7 +82,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     null
                 }
                 "opentun" -> { val fd = openTun(args?.getOrNull(0) ?: error("Libbox не передал TunOptions")); if (method.returnType == java.lang.Long.TYPE || method.returnType == java.lang.Long::class.java) fd.toLong() else fd }
-                "useprocfs", "undernetworkextension", "includeallnetworks" -> false
+                "useprocfs" -> Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                "undernetworkextension", "includeallnetworks" -> false
                 "getinterfaces" -> networkInterfaces(loader)
                 "startdefaultinterfacemonitor" -> {
                     args?.getOrNull(0)?.let { startDefaultInterfaceMonitor(it) }
@@ -91,7 +94,9 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     null
                 }
                 "cleardnscache", "registermyinterface", "startneighbormonitor", "closeneighbormonitor" -> null
-                "findconnectionowner", "localdnstransport", "readwifistate" -> null
+                "findconnectionowner" -> findConnectionOwner(args)
+                "readwifistate" -> readWifiState()
+                "localdnstransport" -> null
                 "systemcertificates" -> iteratorProxy(loader, "StringIterator", emptyList())
                 "sendnotification" -> null
                 else -> defaultValue(method.returnType)
@@ -198,10 +203,39 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             }
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            val connectivity = service.getSystemService(ConnectivityManager::class.java)
+            val underlying = connectivity?.let { findUnderlyingNetwork(it) }
+            if (underlying != null) builder.setUnderlyingNetworks(arrayOf(underlying))
+        }
+
         val descriptor = builder.establish()
             ?: throw IllegalStateException("Android не выдал VPN-интерфейс (разрешение отозвано?)")
         tunDescriptor = descriptor
         return descriptor.fd
+    }
+
+    private fun findConnectionOwner(args: Array<out Any?>?): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return -1
+        val protocol = (args?.getOrNull(0) as? Number)?.toInt() ?: return -1
+        val sourceIp = args.getOrNull(1) as? String ?: return -1
+        val sourcePort = (args.getOrNull(2) as? Number)?.toInt() ?: return -1
+        val destinationIp = args.getOrNull(3) as? String ?: return -1
+        val destinationPort = (args.getOrNull(4) as? Number)?.toInt() ?: return -1
+        val connectivity = service.getSystemService(ConnectivityManager::class.java) ?: return -1
+        return runCatching {
+            connectivity.getConnectionOwnerUid(
+                protocol,
+                InetSocketAddress(sourceIp, sourcePort),
+                InetSocketAddress(destinationIp, destinationPort)
+            )
+        }.getOrDefault(-1)
+    }
+
+    private fun readWifiState(): String {
+        val wifi = service.applicationContext.getSystemService(WifiManager::class.java)
+        val info = runCatching { wifi?.connectionInfo }.getOrNull()
+        return "${info?.ssid.orEmpty()},${info?.bssid.orEmpty()}"
     }
 
     private fun hasNext(iterator: Any?): Boolean {
