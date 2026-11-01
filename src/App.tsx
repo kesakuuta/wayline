@@ -94,7 +94,7 @@ export default function App(){
   }catch(e){message(e instanceof Error?e.message:String(e));}
   finally{setBusy(false);}
  };
- const deleteSubscription=(id:string)=>{if(connected){message('Сначала отключите VPN.');return;}if(subs.length===1){message('Нельзя удалить последний профиль.');return;}const next=subs.filter(s=>s.id!==id);setSubs(next);if(activeSub===id){setActiveSub(next[0].id);setSelected(next[0].servers[0]?.id??'');}setTabMenu(null);setTabMenuPosition(null);};
+ const deleteSubscription=(id:string)=>{if(connected){message('Сначала отключите VPN.');return;}const next=subs.filter(s=>s.id!==id);setSubs(next);if(activeSub===id){setActiveSub(next[0]?.id??'');setSelected(next[0]?.servers[0]?.id??'');}setTabMenu(null);setTabMenuPosition(null);};
  const chooseSub=(id:string)=>{if(connected){message('Сначала отключите VPN.');return;}setActiveSub(id);setSelected(subs.find(s=>s.id===id)?.servers[0]?.id??'');};
  const toggleConnection=async()=>{
   if(busy||connecting)return;
