@@ -890,7 +890,7 @@ mod tests {
         assert_eq!(cfg["outbounds"][0]["server"], "vpn.example.com");
         assert_eq!(cfg["route"]["auto_detect_interface"], true);
         assert_eq!(cfg["outbounds"][1]["tag"], "direct");
-        assert_eq!(cfg["route"]["rules"][2]["ip_is_private"], true);
+        assert_eq!(cfg["route"]["rules"][3]["ip_is_private"], true);
     }
     #[test]
     fn xray_generates_vless_reality_socks_config() {
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn xray_rejects_hysteria2() {
         let outbound = json!({"type":"hysteria2","server":"vpn.example.com","server_port":443,"password":"secret"});
-        assert!(create_xray_config(outbound, 2080).is_err());
+        assert!(create_xray_config(outbound, 2080, &json!({})).is_err());
     }
     #[test]
     fn rejects_bad_servers() {
