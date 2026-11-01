@@ -119,7 +119,7 @@ pub fn stop_on_exit(app: &AppHandle) {
 
 
 #[cfg(windows)]
-fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, engine: &str) -> Result<(), String> {
+fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, engine: &str, routing: &Value) -> Result<(), String> {
     use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut};
     #[link(name = "shell32")]
     extern "system" {
@@ -131,7 +131,7 @@ fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, 
     let data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let pending = data_dir.join("pending-connect.json");
-    let payload = json!({"outbound":outbound,"mode":mode,"engine":engine});
+    let payload = json!({"outbound":outbound,"mode":mode,"engine":engine,"routing":routing});
     fs::write(&pending, serde_json::to_vec(&payload).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let verb: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
@@ -146,7 +146,7 @@ fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, 
 }
 
 #[cfg(not(windows))]
-fn request_windows_tun_elevation(_app: &AppHandle, _outbound: &Value, _mode: &str, _engine: &str) -> Result<(), String> {
+fn request_windows_tun_elevation(_app: &AppHandle, _outbound: &Value, _mode: &str, _engine: &str, _routing: &Value) -> Result<(), String> {
     Ok(())
 }
 
@@ -373,7 +373,7 @@ fn route_string_list(routing: &Value, key: &str) -> Vec<String> {
         items.iter().filter_map(Value::as_str).map(str::to_string).collect()
     } else {
         routing.get(key).and_then(Value::as_str).unwrap_or("")
-            .split(|c| c == '\\n' || c == ',' || c == ';').map(str::to_string).collect()
+            .split(|c| c == '\n' || c == ',' || c == ';').map(str::to_string).collect()
     };
     values.into_iter().map(|item| item.trim().trim_start_matches("*.").trim_start_matches('.').to_ascii_lowercase())
         .filter(|item| !item.is_empty() && item.len() <= 253 && item.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
@@ -573,14 +573,14 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
             rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"}));
         }
     }
-    let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
     let doh_url = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
+    let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
     Ok(json!({
         "log":{"loglevel":"warning"},
         "dns":{"servers":[doh_url],"queryStrategy":"UseIPv4"},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
-        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}],
-        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"balancers":[],"domainMatcher":"hybrid","final":final_tag}
+        "outbounds":if final_tag == "direct" { vec![json!({"protocol":"freedom","tag":"direct"}),proxy,json!({"protocol":"blackhole","tag":"block"})] } else { vec![proxy,json!({"protocol":"freedom","tag":"direct"}),json!({"protocol":"blackhole","tag":"block"})] },
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"balancers":[],"domainMatcher":"hybrid"}
     }))
 }
 
@@ -784,11 +784,11 @@ pub fn core_log(state: State<'_, CoreState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String) -> Result<CoreStatus, String> {
+pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String, routing: Value) -> Result<CoreStatus, String> {
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
     if engine != "xray" && engine != "sing-box" { return Err("Неизвестное ядро".into()); }
     if engine == "xray" && mode == "tun" { return Err("Xray в Wayline пока работает в режиме локального SOCKS-прокси. Для TUN выберите sing-box.".into()); }
-    if mode == "tun" { request_windows_tun_elevation(&app, &outbound, &mode, &engine)?; }
+    if mode == "tun" { request_windows_tun_elevation(&app, &outbound, &mode, &engine, &routing)?; }
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.refresh();
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
