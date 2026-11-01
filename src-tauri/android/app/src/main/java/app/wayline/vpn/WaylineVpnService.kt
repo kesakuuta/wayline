@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.net.TrafficStats
@@ -110,6 +111,7 @@ class WaylineVpnService : VpnService() {
             .putBoolean(KEY_CONNECTING, connecting)
             .putString(KEY_ERROR, error)
             .putString(KEY_MODE, mode)
+            .putInt(KEY_PID, Process.myPid())
             .putLong(KEY_STARTED, if (running) startedAt else 0L)
             .putLong(KEY_RX_START, if (running) TrafficStats.getUidRxBytes(Process.myUid()) else -1L)
             .putLong(KEY_TX_START, if (running) TrafficStats.getUidTxBytes(Process.myUid()) else -1L)
@@ -179,6 +181,25 @@ class WaylineVpnService : VpnService() {
         const val KEY_RX_START = "rx_start"
         const val KEY_TX_START = "tx_start"
         const val KEY_MODE = "mode"
+        const val KEY_PID = "process_id"
+
+        fun recoverStaleState(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val active = prefs.getBoolean(KEY_RUNNING, false) || prefs.getBoolean(KEY_CONNECTING, false)
+            val previousPid = prefs.getInt(KEY_PID, -1)
+            val currentPid = Process.myPid()
+            if (active && previousPid != currentPid) {
+                prefs.edit()
+                    .putBoolean(KEY_RUNNING, false)
+                    .putBoolean(KEY_CONNECTING, false)
+                    .putString(KEY_ERROR, "Предыдущее подключение было прервано. Подключитесь снова.")
+                    .putLong(KEY_STARTED, 0L)
+                    .putLong(KEY_RX_START, -1L)
+                    .putLong(KEY_TX_START, -1L)
+                    .putInt(KEY_PID, currentPid)
+                    .apply()
+            }
+        }
         private const val CHANNEL_ID = "wayline_vpn_status"
         private const val NOTIFICATION_ID = 4101
     }
