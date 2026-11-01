@@ -2,6 +2,10 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export type CoreMode = 'tun' | 'proxy';
 export type CoreEngine = 'xray' | 'sing-box';
+export type RouteSettings = { policy:'rules'|'proxy'|'direct'; rulesEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
+export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, bypassLan:true, blockAds:true, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
+export function loadRouteSettings():RouteSettings { try { const saved=JSON.parse(localStorage.getItem('wayline.routing.v1')||'{}'); return {...defaultRouteSettings,...saved}; } catch { return defaultRouteSettings; } }
+const domainList=(value:string)=>value.split(/[\\n,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x && /^[a-z0-9*._-]+$/.test(x)).slice(0,256);
 export type CoreStatus = {
   running: boolean;
   connecting?: boolean;
@@ -42,7 +46,8 @@ export async function status(): Promise<CoreStatus> {
 export async function connect(
   outbound: Record<string, unknown>,
   mode: CoreMode,
-  engine: CoreEngine
+  engine: CoreEngine,
+  routing: RouteSettings = loadRouteSettings()
 ): Promise<CoreStatus> {
   if (isAndroidNative()) {
     const android = window.WaylineAndroid;
@@ -63,28 +68,55 @@ export async function connect(
           listen: '127.0.0.1',
           listen_port: 2080
         }];
+    const rules: Record<string, unknown>[] = [
+      { action: 'sniff' },
+      { protocol: 'dns', action: 'hijack-dns' }
+    ];
+    const ruleSets: Record<string, unknown>[] = [];
+    if (routing.rulesEnabled) {
+      if (routing.blockAds) {
+        ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'direct', update_interval: '24h' });
+        rules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' });
+      }
+      const blocked = domainList(routing.blockDomains);
+      const direct = domainList(routing.directDomains);
+      const proxied = domainList(routing.proxyDomains);
+      if (blocked.length) rules.push({ domain_suffix: blocked, action: 'reject' });
+      if (direct.length) rules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
+      if (proxied.length) rules.push({ domain_suffix: proxied, action: 'route', outbound: 'proxy' });
+      const country = routing.geoCountry.trim().toLowerCase();
+      if (/^[a-z]{2}$/.test(country)) {
+        const siteTag = 'geosite-' + country;
+        const ipTag = 'geoip-' + country;
+        ruleSets.push({ type: 'remote', tag: siteTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/' + siteTag + '.srs', download_detour: 'direct', update_interval: '24h' });
+        ruleSets.push({ type: 'remote', tag: ipTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/' + ipTag + '.srs', download_detour: 'direct', update_interval: '24h' });
+        rules.push({ rule_set: [siteTag, ipTag], action: 'route', outbound: 'direct' });
+      }
+      if (routing.bypassLan) rules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
+    }
+    let doh: URL;
+    try { doh = new URL(routing.dohUrl); if (doh.protocol !== 'https:') throw new Error('HTTPS required'); }
+    catch { doh = new URL(defaultRouteSettings.dohUrl); }
     const config = {
       log: { level: 'info', timestamp: true },
       dns: {
         servers: [
           { type: 'local', tag: 'bootstrap' },
-          { type: 'udp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }
+          { type: 'https', tag: 'dns-remote', server: doh.hostname, server_port: Number(doh.port) || 443, path: doh.pathname + doh.search, detour: routing.dnsRoute, tls: { enabled: true, server_name: doh.hostname } }
         ],
         final: 'dns-remote',
-        strategy: 'prefer_ipv4'
+        strategy: routing.dnsStrategy
       },
       inbounds,
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: {
         auto_detect_interface: true,
         default_domain_resolver: { server: 'bootstrap' },
-        rules: [
-          { action: 'sniff' },
-          { protocol: 'dns', action: 'hijack-dns' },
-          { ip_is_private: true, action: 'route', outbound: 'direct' }
-        ],
-        final: 'proxy'
-      }
+        rule_set: ruleSets,
+        rules,
+        final: routing.policy === 'direct' ? 'direct' : 'proxy'
+      },
+      experimental: { cache_file: { enabled: true } }
     };
     android.connect(JSON.stringify(config), mode);
     // Do not report "connected" merely because the Android service request was queued.
@@ -104,7 +136,7 @@ export async function connect(
     return current;
   }
   requireDesktop();
-  return invoke<CoreStatus>('core_connect', { outbound, mode, engine });
+  return invoke<CoreStatus>('core_connect', { outbound, mode, engine, routing });
 }
 export async function disconnect(): Promise<CoreStatus> {
   if (isAndroidNative()) {
@@ -155,7 +187,7 @@ export async function pingServer(host: string, port: number): Promise<number|nul
   catch { return null; }
 }
 
-export type PendingConnection = { outbound: Record<string, unknown>; mode: CoreMode; engine: CoreEngine };
+export type PendingConnection = { outbound: Record<string, unknown>; mode: CoreMode; engine: CoreEngine; routing?: RouteSettings };
 export async function takePendingConnection(): Promise<PendingConnection|null> {
   if (!isTauri()) return null;
   try { return await invoke<PendingConnection|null>('core_take_pending_connect'); }
