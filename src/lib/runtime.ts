@@ -83,8 +83,8 @@ export async function connect(
       if (suffixes.length) routeRules.push(action === 'reject' ? { domain_suffix: suffixes, action: 'reject' } : { domain_suffix: suffixes, action: 'route', outbound: action });
       if (tags.length) routeRules.push(action === 'reject' ? { rule_set: tags, action: 'reject' } : { rule_set: tags, action: 'route', outbound: action });
     };
-    if (routing?.enabled !== false && routing?.bypassLan !== false) routeRules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
-    if (routing?.enabled !== false) {
+    if (routing?.enabled !== false && routing?.mode === 'rule' && routing?.bypassLan !== false) routeRules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
+    if (routing?.enabled !== false && routing?.mode === 'rule') {
       addRouteList(routing?.directDomains, 'direct'); addRouteList(routing?.proxyDomains, 'proxy'); addRouteList(routing?.blockDomains, 'reject');
       if (routing?.blockAds) { ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'proxy' }); routeRules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' }); }
     }

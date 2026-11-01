@@ -207,11 +207,11 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     }
     let enabled = routing.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
-    if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) {
+    if enabled && routing.get("mode").and_then(Value::as_str).unwrap_or("rule") == "rule" && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) {
         rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
     }
     let mut rule_sets = Vec::<Value>::new();
-    if enabled {
+    if enabled && routing.get("mode").and_then(Value::as_str).unwrap_or("rule") == "rule" {
         for (key, outbound_tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "reject")] {
             let values = routing_domains(routing, key);
             let mut suffixes = Vec::<String>::new(); let mut tags = Vec::<String>::new();
