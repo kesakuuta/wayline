@@ -326,13 +326,13 @@ fn restore_linux_system_proxy(backup: &Path) -> Result<(), String> {
     let saved: Value = serde_json::from_slice(&fs::read(backup).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Повреждена резервная копия системного прокси: {e}"))?;
     for key in ["mode", "use-same-proxy"] {
-        if let Some(value) = saved.get(format!("org.gnome.system.proxy|{key}")).and_then(Value::as_str) {
+        if let Some(value) = saved.get(&format!("org.gnome.system.proxy|{key}")).and_then(Value::as_str) {
             gsettings_set("org.gnome.system.proxy", key, value)?;
         }
     }
     for schema in ["org.gnome.system.proxy.socks", "org.gnome.system.proxy.http", "org.gnome.system.proxy.https"] {
         for key in ["host", "port"] {
-            if let Some(value) = saved.get(format!("{schema}|{key}")).and_then(Value::as_str) {
+            if let Some(value) = saved.get(&format!("{schema}|{key}")).and_then(Value::as_str) {
                 gsettings_set(schema, key, value)?;
             }
         }
