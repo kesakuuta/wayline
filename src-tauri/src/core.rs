@@ -1,4 +1,4 @@
-//! Managed desktop proxy-core adapter for Xray and sing-box. No shell invocation.
+//! Managed desktop core adapter for Xray and sing-box with platform proxy restoration.
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -245,11 +245,10 @@ $ErrorActionPreference = 'Stop'
 $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
 if (Test-Path $env:WAYLINE_PROXY_BACKUP) {
   $s = Get-Content -LiteralPath $env:WAYLINE_PROXY_BACKUP -Raw | ConvertFrom-Json
-  foreach ($n in @('ProxyEnable','ProxyServer','ProxyOverride','AutoConfigURL')) {
-    $present = [bool]$s.($n + 'Present')
-    if ($present) { Set-ItemProperty -Path $p -Name $n -Value $s.$n }
-    else { Remove-ItemProperty -Path $p -Name $n -ErrorAction SilentlyContinue }
-  }
+  if ([bool]$s.ProxyEnablePresent) { New-ItemProperty -Path $p -Name ProxyEnable -PropertyType DWord -Value ([int]$s.ProxyEnable) -Force | Out-Null } else { Remove-ItemProperty -Path $p -Name ProxyEnable -ErrorAction SilentlyContinue }
+  if ([bool]$s.ProxyServerPresent) { New-ItemProperty -Path $p -Name ProxyServer -PropertyType String -Value ([string]$s.ProxyServer) -Force | Out-Null } else { Remove-ItemProperty -Path $p -Name ProxyServer -ErrorAction SilentlyContinue }
+  if ([bool]$s.ProxyOverridePresent) { New-ItemProperty -Path $p -Name ProxyOverride -PropertyType String -Value ([string]$s.ProxyOverride) -Force | Out-Null } else { Remove-ItemProperty -Path $p -Name ProxyOverride -ErrorAction SilentlyContinue }
+  if ([bool]$s.AutoConfigURLPresent) { New-ItemProperty -Path $p -Name AutoConfigURL -PropertyType String -Value ([string]$s.AutoConfigURL) -Force | Out-Null } else { Remove-ItemProperty -Path $p -Name AutoConfigURL -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $env:WAYLINE_PROXY_BACKUP -Force
 }
 Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WaylineWinInetRestore { [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l); }' -ErrorAction SilentlyContinue
