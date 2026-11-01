@@ -327,8 +327,15 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) { rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"})); }
     if enabled {
         for (key, tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "block")] {
-            let mut domains: Vec<String> = routing_domains(routing, key).into_iter().map(|d| format!("domain:{d}")).collect();
-            if !domains.is_empty() { rules.push(json!({"type":"field","domain":domains,"outboundTag":tag})); }
+            let mut domains = Vec::<String>::new(); let mut ips = Vec::<String>::new();
+            for value in routing_domains(routing, key) {
+                if value.starts_with("geoip:") { ips.push(value); }
+                else if value.starts_with("geosite:") || value.starts_with("domain:") { domains.push(value); }
+                else { domains.push(format!("domain:{value}")); }
+            }
+            if !domains.is_empty() && !ips.is_empty() { rules.push(json!({"type":"field","domain":domains,"ip":ips,"outboundTag":tag})); }
+            else if !domains.is_empty() { rules.push(json!({"type":"field","domain":domains,"outboundTag":tag})); }
+            else if !ips.is_empty() { rules.push(json!({"type":"field","ip":ips,"outboundTag":tag})); }
         }
         if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { rules.push(json!({"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block"})); }
     }
