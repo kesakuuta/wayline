@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, CloudDownload, Copy, Gauge, Globe2, Heart, Menu, Moon, MoreHorizontal, Palette, Plus, Power, RefreshCw, Search, Settings2, Shield, SlidersHorizontal, Sparkles, Sun, Trash2, Upload, X, Zap } from 'lucide-react';
+import { Activity, Check, CircleHelp, CloudDownload, Copy, Gauge, Globe2, Heart, Moon, MoreHorizontal, Palette, Plus, Power, RefreshCw, Search, Settings2, Shield, SlidersHorizontal, Sun, Trash2, Upload, X, Zap } from 'lucide-react';
 import type { Appearance, AppearanceStyle, Mode, Server, Subscription, ThemeName } from './lib/types';
 import { defaultAppearance, loadAppearance, saveAppearance } from './lib/persist';
 import { importConfigs } from './lib/links';
-import { connect, disconnect, status, coreLog, fetchSubscription, readClipboard, isTauri, isAndroidNative, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
+import { connect, disconnect, status, coreLog, fetchSubscription, readClipboard, pingServer, takePendingConnection, isTauri, isAndroidNative, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
 
 const initial:Subscription[]=[];
 const PROFILE_KEY = 'wayline.profiles.v2';
@@ -19,12 +19,6 @@ const lightPalette:Record<ThemeName,{bg:string;surface:string;surface2:string;in
  Ocean:{bg:'#eaf3f8',surface:'#f8fcff',surface2:'#dceaf2',ink:'#172b3a',muted:'#526b7c',line:'#c3d5e1'},Graphite:{bg:'#eef0f3',surface:'#fafbfc',surface2:'#e1e5ea',ink:'#252a32',muted:'#626d7a',line:'#cbd1d9'},AMOLED:{bg:'#f0f5f8',surface:'#ffffff',surface2:'#e1ebf0',ink:'#17252d',muted:'#566b76',line:'#c6d5dc'},Lavender:{bg:'#f2eef8',surface:'#fcfaff',surface2:'#e8def3',ink:'#30243d',muted:'#746581',line:'#d8c9e6'},Forest:{bg:'#edf4ef',surface:'#f9fdf9',surface2:'#dcebe1',ink:'#20352a',muted:'#5d7666',line:'#c6dbcd'},Sunset:{bg:'#fbefeb',surface:'#fffaf8',surface2:'#f4dfd8',ink:'#3d2924',muted:'#80645b',line:'#e6c9bf'},Sand:{bg:'#f1e8dc',surface:'#fff9f0',surface2:'#eadccd',ink:'#33251f',muted:'#78685e',line:'#d7c4b1'},Nord:{bg:'#edf2f6',surface:'#f9fcff',surface2:'#dce6ee',ink:'#263746',muted:'#5f7282',line:'#c5d3df'}
 };
 const styles:AppearanceStyle[]=['Material 3 Classic','Expressive','Minimal','Soft Glass','Liquid Glass'];
-const formatBytes=(value:number|null|undefined)=>{
- if(value===null||value===undefined||!Number.isFinite(value)||value<0)return '—';
- const units=['Б','КБ','МБ','ГБ','ТБ'];let amount=value,index=0;
- while(amount>=1024&&index<units.length-1){amount/=1024;index++;}
- return `${amount.toFixed(index===0?0:2)} ${units[index]}`;
-};
 const palette:Record<ThemeName,{primary:string;bg:string;surface:string;surface2:string;ink:string;muted:string;line:string;glow:string}>={
  Ocean:{primary:'#8bd5f5',bg:'#0b1b2d',surface:'#142a40',surface2:'#1b354e',ink:'#e5f3fc',muted:'#9bb2c5',line:'#35516a',glow:'#398fc0'},
  Graphite:{primary:'#c7d1df',bg:'#171a20',surface:'#232832',surface2:'#2d333e',ink:'#eff2f7',muted:'#a7b0bd',line:'#444c58',glow:'#788da8'},
@@ -148,7 +142,6 @@ export default function App(){
    <button className={!settings?'active':''} aria-label="Главная" title="Главная" onClick={()=>setSettings(false)}><Shield size={21}/><span className="nav-indicator"/></button>
    <button className={settings?'active':''} aria-label="Настройки" title="Настройки" onClick={()=>setSettings(true)}><Settings2 size={21}/><span className="nav-indicator"/></button>
   </nav>
-  {diagnostics&&<div className="diagnostics-backdrop" onMouseDown={e=>e.target===e.currentTarget&&setDiagnostics(false)}><section className="diagnostics-panel"><header><div><span className="eyebrow">WAYLINE · ЖУРНАЛ</span><h3>Диагностика {native?.engine??coreEngine}</h3></div><div className="diagnostics-actions"><button className="icon-btn" title="Скопировать все логи" onClick={()=>{void navigator.clipboard.writeText(logText||native?.error||'').then(()=>message('Логи скопированы')).catch(()=>message('Не удалось получить доступ к буферу обмена'));}}><Copy size={16}/></button><button className="icon-btn" title="Закрыть" onClick={()=>setDiagnostics(false)}><X size={17}/></button></div></header><pre className="core-log">{logText||native?.error||'Лог пуст. Подключите сервер.'}</pre><button className="secondary-btn" onClick={async()=>{try{setLogText(await coreLog());}catch(e){setLogText(String(e));}}}><RefreshCw size={14}/> Обновить журнал</button></section></div>}
   {diagnostics&&<div className="diagnostics-backdrop" onMouseDown={e=>e.target===e.currentTarget&&setDiagnostics(false)}><section className="diagnostics-panel"><header><div><span className="eyebrow">WAYLINE · ЖУРНАЛ</span><h3>Диагностика {native?.engine??coreEngine}</h3></div><div className="diagnostics-actions"><button className="icon-btn" title="Скопировать все логи" onClick={()=>{void navigator.clipboard.writeText(logText||native?.error||'').then(()=>message('Логи скопированы')).catch(()=>message('Не удалось получить доступ к буферу обмена'));}}><Copy size={16}/></button><button className="icon-btn" title="Закрыть" onClick={()=>setDiagnostics(false)}><X size={17}/></button></div></header><pre className="core-log">{logText||native?.error||'Лог пуст. Подключите сервер.'}</pre><button className="secondary-btn" onClick={async()=>{try{setLogText(await coreLog());}catch(e){setLogText(String(e));}}}><RefreshCw size={14}/> Обновить журнал</button></section></div>}
   {notice&&<div className="snackbar"><span className="snackbar-dot"/>{notice}<button onClick={()=>setNotice('')}><X size={15}/></button></div>}
   <footer className="app-footer"><span>WAYLINE <i>·</i> v0.2.0</span><span>{connected?`${native?.engine??coreEngine} работает`:'Не подключено'} <i>·</i> {isAndroidNative()?'Android':isTauri()?'Desktop':'Web preview'}</span></footer>
