@@ -33,11 +33,12 @@ class MainActivity : TauriActivity() {
     override fun onWebViewCreate(webView: WebView) {
         super.onWebViewCreate(webView)
         webView.addJavascriptInterface(WaylineJsBridge(), "WaylineAndroid")
-        // Disable browser-like long-press selection and copy menus in the Android shell.
-        webView.setOnLongClickListener { true }
-        webView.isHapticFeedbackEnabled = false
-        webView.setOnCreateContextMenuListener { _, _, _ -> }
-        webView.evaluateJavascript("(function(){document.addEventListener('contextmenu',function(e){e.preventDefault();},true);document.addEventListener('selectstart',function(e){if(!e.target.closest('input,textarea,select,[contenteditable=true]'))e.preventDefault();},true);})();", null)
+        // Keep text selection available in diagnostics while suppressing browser menus elsewhere.
+        webView.isLongClickable = true
+        webView.setOnLongClickListener(null)
+        webView.isHapticFeedbackEnabled = true
+        webView.setOnCreateContextMenuListener(null)
+        webView.evaluateJavascript("(function(){document.addEventListener('contextmenu',function(e){if(!e.target.closest('.core-log,input,textarea,select,[contenteditable=true]'))e.preventDefault();},true);document.addEventListener('selectstart',function(e){if(!e.target.closest('.core-log,input,textarea,select,[contenteditable=true]'))e.preventDefault();},true);})();", null)
     }
 
     private fun startVpn(config: String?, mode: String) {
