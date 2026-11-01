@@ -259,6 +259,9 @@ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; pu
 }
 
 #[cfg(not(windows))]
+fn enable_windows_system_proxy(_port: u16, _backup: &Path) -> Result<(), String> { Ok(()) }
+
+#[cfg(not(windows))]
 fn restore_windows_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
 
 trait IfEmpty { fn if_empty(self, fallback: &str) -> String; }
