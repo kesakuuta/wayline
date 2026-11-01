@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn tun_route_and_remote_are_generated() {
-        let cfg = create_singbox_config(json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}), "tun", 2080).unwrap();
+        let cfg = create_singbox_config(json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}), "tun", 2080, &json!({})).unwrap();
         assert_eq!(cfg["inbounds"][1]["type"], "tun");
         assert_eq!(cfg["inbounds"][1]["auto_route"], true);
         assert_eq!(cfg["outbounds"][0]["server"], "vpn.example.com");
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn xray_generates_vless_reality_socks_config() {
         let outbound = json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"1234","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"example.com","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"pub","short_id":"abcd"}}});
-        let cfg = create_xray_config(outbound, 2080).unwrap();
+        let cfg = create_xray_config(outbound, 2080, &json!({})).unwrap();
         assert_eq!(cfg["outbounds"][0]["protocol"], "vless");
         assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["address"], "vpn.example.com");
         assert_eq!(cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"], "1234");
@@ -645,16 +645,16 @@ mod tests {
     #[test]
     fn xray_rejects_hysteria2() {
         let outbound = json!({"type":"hysteria2","server":"vpn.example.com","server_port":443,"password":"secret"});
-        assert!(create_xray_config(outbound, 2080).is_err());
+        assert!(create_xray_config(outbound, 2080, &json!({})).is_err());
     }
     #[test]
     fn rejects_bad_servers() {
-        assert!(create_singbox_config(json!({"type":"vless","server":"","server_port":443}), "tun", 2080).is_err());
+        assert!(create_singbox_config(json!({"type":"vless","server":"","server_port":443}), "tun", 2080, &json!({})).is_err());
         assert!(create_singbox_config(json!({"type":"direct","server":"vpn.example.com","server_port":443}), "tun", 2080).is_err());
     }
     #[test]
     fn local_mode_is_not_tun() {
-        let cfg = create_singbox_config(json!({"type":"trojan","server":"vpn.example.com","server_port":443}), "proxy", 2080).unwrap();
+        let cfg = create_singbox_config(json!({"type":"trojan","server":"vpn.example.com","server_port":443}), "proxy", 2080, &json!({})).unwrap();
         assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
     }
 }
