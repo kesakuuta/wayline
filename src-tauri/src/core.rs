@@ -75,7 +75,7 @@ impl Managed {
     }
 
     fn stop(&mut self) {
-        if let Some(path) = self.proxy_backup.take() { let _ = restore_windows_system_proxy(&path); }
+        if let Some(path) = self.proxy_backup.take() { let _ = restore_system_proxy(&path); }
         if let Some(mut child) = self.child.take() {
             #[cfg(unix)] {
                 // Give sing-box time to undo routes and firewall changes.
@@ -264,6 +264,100 @@ fn enable_windows_system_proxy(_port: u16, _engine: &str, _backup: &Path) -> Res
 
 #[cfg(not(windows))]
 fn restore_windows_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
+
+
+#[cfg(target_os = "linux")]
+fn gsettings_get(schema: &str, key: &str) -> Result<String, String> {
+    let output = Command::new("gsettings").args(["get", schema, key]).output()
+        .map_err(|e| format!("Не найден gsettings: {e}"))?;
+    if !output.status.success() { return Err(format!("GNOME не поддерживает настройку {schema}.{key}")); }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<(), String> {
+    let output = Command::new("gsettings").args(["set", schema, key, value]).output()
+        .map_err(|e| format!("Не удалось вызвать gsettings: {e}"))?;
+    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn enable_linux_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(), String> {
+    let entries = [
+        ("org.gnome.system.proxy", "mode"),
+        ("org.gnome.system.proxy", "use-same-proxy"),
+        ("org.gnome.system.proxy.socks", "host"),
+        ("org.gnome.system.proxy.socks", "port"),
+        ("org.gnome.system.proxy.http", "host"),
+        ("org.gnome.system.proxy.http", "port"),
+        ("org.gnome.system.proxy.https", "host"),
+        ("org.gnome.system.proxy.https", "port"),
+    ];
+    if !backup.is_file() {
+        let mut saved = serde_json::Map::new();
+        for (schema, key) in entries {
+            saved.insert(format!("{schema}|{key}"), json!(gsettings_get(schema, key)?));
+        }
+        fs::write(backup, serde_json::to_vec(&Value::Object(saved)).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
+    gsettings_set("org.gnome.system.proxy", "mode", "'manual'")?;
+    gsettings_set("org.gnome.system.proxy", "use-same-proxy", "false")?;
+    gsettings_set("org.gnome.system.proxy.socks", "host", "'127.0.0.1'")?;
+    gsettings_set("org.gnome.system.proxy.socks", "port", &port.to_string())?;
+    if engine == "xray" {
+        gsettings_set("org.gnome.system.proxy.http", "host", "''")?;
+        gsettings_set("org.gnome.system.proxy.http", "port", "0")?;
+        gsettings_set("org.gnome.system.proxy.https", "host", "''")?;
+        gsettings_set("org.gnome.system.proxy.https", "port", "0")?;
+    } else {
+        gsettings_set("org.gnome.system.proxy.http", "host", "'127.0.0.1'")?;
+        gsettings_set("org.gnome.system.proxy.http", "port", &port.to_string())?;
+        gsettings_set("org.gnome.system.proxy.https", "host", "'127.0.0.1'")?;
+        gsettings_set("org.gnome.system.proxy.https", "port", &port.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn restore_linux_system_proxy(backup: &Path) -> Result<(), String> {
+    if !backup.is_file() { return Ok(()); }
+    let saved: Value = serde_json::from_slice(&fs::read(backup).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Повреждена резервная копия системного прокси: {e}"))?;
+    for key in ["mode", "use-same-proxy"] {
+        if let Some(value) = saved.get(format!("org.gnome.system.proxy|{key}")).and_then(Value::as_str) {
+            gsettings_set("org.gnome.system.proxy", key, value)?;
+        }
+    }
+    for schema in ["org.gnome.system.proxy.socks", "org.gnome.system.proxy.http", "org.gnome.system.proxy.https"] {
+        for key in ["host", "port"] {
+            if let Some(value) = saved.get(format!("{schema}|{key}")).and_then(Value::as_str) {
+                gsettings_set(schema, key, value)?;
+            }
+        }
+    }
+    fs::remove_file(backup).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn enable_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(), String> {
+    enable_windows_system_proxy(port, engine, backup)
+}
+#[cfg(target_os = "linux")]
+fn enable_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(), String> {
+    enable_linux_system_proxy(port, engine, backup)
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn enable_system_proxy(_port: u16, _engine: &str, _backup: &Path) -> Result<(), String> { Ok(()) }
+
+#[cfg(windows)]
+fn restore_system_proxy(backup: &Path) -> Result<(), String> { restore_windows_system_proxy(backup) }
+#[cfg(target_os = "linux")]
+fn restore_system_proxy(backup: &Path) -> Result<(), String> { restore_linux_system_proxy(backup) }
+#[cfg(not(any(windows, target_os = "linux")))]
+fn restore_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
 
 trait IfEmpty { fn if_empty(self, fallback: &str) -> String; }
 impl IfEmpty for String { fn if_empty(self, fallback: &str) -> String { if self.trim().is_empty() { fallback.into() } else { self } } }
@@ -576,7 +670,7 @@ pub fn core_status(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreSt
     if managed.child.is_none() {
         if let Ok(data_dir) = app.path().app_local_data_dir() {
             let stale_backup = data_dir.join("proxy-previous.json");
-            if stale_backup.is_file() { let _ = restore_windows_system_proxy(&stale_backup); }
+            if stale_backup.is_file() { let _ = restore_system_proxy(&stale_backup); }
         }
     }
     Ok(managed.status())
@@ -687,10 +781,10 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     }
     // Process can be running when server is temporarily unavailable. Do not call that 'connected'.
     managed.verification = Some(if result.is_ok() { "verified" } else { "unverified" }.into());
-    if result.is_ok() && mode == "proxy" && cfg!(windows) {
+    if result.is_ok() && mode == "proxy" && cfg!(any(windows, target_os = "linux")) {
         let backup = dir.join("proxy-previous.json");
         managed.proxy_backup = Some(backup.clone());
-        if let Err(error) = enable_windows_system_proxy(port, &engine, &backup) { managed.stop(); return Err(error); }
+        if let Err(error) = enable_system_proxy(port, &engine, &backup) { managed.stop(); return Err(error); }
     }
     if let Err(error) = result { managed.last_error = Some(format!("Ядро работает, но удалённое TCP-соединение не подтверждено: {error}")); }
     Ok(managed.status())
