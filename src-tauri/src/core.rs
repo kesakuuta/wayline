@@ -165,7 +165,7 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value
     if mode == "tun" {
         inbounds.push(json!({
             "type":"tun", "tag":"vpn", "interface_name":"wayline0",
-            "address":["172.19.0.1/30"], "auto_route":true,
+            "address":["172.19.0.1/30","fdfe:dcba:9876::1/126"], "mtu":1500, "auto_route":true,
             "strict_route":cfg!(target_os="windows"),
             "auto_redirect":cfg!(target_os="linux")
         }));
@@ -561,6 +561,8 @@ mod tests {
         assert_eq!(cfg["inbounds"][1]["auto_route"], true);
         assert_eq!(cfg["outbounds"][0]["server"], "vpn.example.com");
         assert_eq!(cfg["route"]["auto_detect_interface"], true);
+        assert_eq!(cfg["outbounds"][1]["tag"], "direct");
+        assert_eq!(cfg["route"]["rules"][2]["ip_is_private"], true);
     }
     #[test]
     fn xray_generates_vless_reality_socks_config() {

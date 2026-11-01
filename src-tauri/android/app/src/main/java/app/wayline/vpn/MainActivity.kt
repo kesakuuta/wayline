@@ -86,6 +86,9 @@ class MainActivity : TauriActivity() {
 
         @JavascriptInterface
         fun disconnect(): String {
+            // If the VPN permission dialog is still open, do not let its callback
+            // resurrect a connection after the user has already pressed Disconnect.
+            pendingConfig = null
             getSharedPreferences(WaylineVpnService.PREFS, MODE_PRIVATE).edit()
                 .putBoolean(WaylineVpnService.KEY_CONNECTING, false)
                 .apply()

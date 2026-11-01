@@ -74,7 +74,10 @@ export async function connect(
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: {
         auto_detect_interface: true,
-        rules: [{ action: 'sniff' }],
+        rules: [
+          { action: 'sniff' },
+          { ip_is_private: true, action: 'route', outbound: 'direct' }
+        ],
         final: 'proxy'
       }
     };
