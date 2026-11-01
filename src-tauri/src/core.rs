@@ -177,7 +177,7 @@ fn open_port() -> Result<u16, String> {
 
 fn routing_domains(settings: &Value, key: &str) -> Vec<String> {
     settings.get(key).and_then(Value::as_str).unwrap_or("")
-        .split(|c: char| c == '\\n' || c == ',' || c == ';')
+        .split(|c: char| c == '\n' || c == ',' || c == ';')
         .map(str::trim).map(|s| s.trim_start_matches('.'))
         .filter(|s| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control()))
         .map(str::to_string).collect()
@@ -322,12 +322,14 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
     let dns_address = match dns_server { "google" => "https://8.8.8.8/dns-query", "quad9" => "https://9.9.9.9/dns-query", "system" => "localhost", _ => "https://1.1.1.1/dns-query" };
     let final_tag = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
+    rules.push(json!({"type":"field","network":"tcp,udp","outboundTag":final_tag}));
+    let dns_strategy = match routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("ipv4_only") { "prefer_ipv6" => "UseIPv6", "prefer_ipv4" => "UseIP", _ => "UseIPv4" };
     Ok(json!({
         "log":{"loglevel":"warning"},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
         "outbounds":[proxy,{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block","settings":{"response":{"type":"http"}}}],
-        "dns":{"servers":[dns_address,"localhost"],"queryStrategy":routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("UseIPv4")},
-        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"domainStrategy":"AsIs","final":final_tag}
+        "dns":{"servers":[dns_address,"localhost"],"queryStrategy":dns_strategy},
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules}
     }))
 }
 
