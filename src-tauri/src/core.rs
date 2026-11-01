@@ -266,6 +266,12 @@ fn restore_windows_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
 
 
 #[cfg(target_os = "linux")]
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join(name)).find(|candidate| candidate.is_file())
+}
+
+#[cfg(target_os = "linux")]
 fn gsettings_get(schema: &str, key: &str) -> Result<String, String> {
     let output = Command::new("gsettings").args(["get", schema, key]).output()
         .map_err(|e| format!("Не найден gsettings: {e}"))?;
@@ -282,7 +288,38 @@ fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn run_kde_config(tool: &Path, config: &Path, key: &str, value: &str) -> Result<(), String> {
+    let output = Command::new(tool)
+        .args(["--file"]).arg(config)
+        .args(["--group", "Proxy Settings", "--key", key, value])
+        .output().map_err(|e| format!("Не удалось запустить {}: {e}", tool.display()))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().if_empty("kwriteconfig завершился с ошибкой"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn notify_kde_proxy_changed() -> Result<(), String> {
+    let dbus = find_executable("dbus-send").ok_or("Не найден dbus-send для обновления настроек KDE")?;
+    let output = Command::new(dbus)
+        .args(["--type=signal", "/KIO/Scheduler", "org.kde.KIO.Scheduler.reparseSlaveConfiguration", "string:''"])
+        .output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().if_empty("KDE не принял обновление прокси"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn enable_linux_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(), String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_ascii_uppercase();
+    let is_kde = desktop.contains("KDE") || desktop.contains("TRINITY");
+    let kde_tool = if is_kde {
+        ["kwriteconfig6", "kwriteconfig5", "kwriteconfig"].iter().find_map(|name| find_executable(name))
+    } else { None };
+    let gsettings_available = find_executable("gsettings").is_some();
+    let mut saved = serde_json::Map::new();
     let entries = [
         ("org.gnome.system.proxy", "mode"),
         ("org.gnome.system.proxy", "use-same-proxy"),
@@ -293,28 +330,68 @@ fn enable_linux_system_proxy(port: u16, engine: &str, backup: &Path) -> Result<(
         ("org.gnome.system.proxy.https", "host"),
         ("org.gnome.system.proxy.https", "port"),
     ];
-    if !backup.is_file() {
-        let mut saved = serde_json::Map::new();
+    let mut use_gsettings = false;
+    if gsettings_available {
         for (schema, key) in entries {
-            saved.insert(format!("{schema}|{key}"), json!(gsettings_get(schema, key)?));
+            match gsettings_get(schema, key) {
+                Ok(value) => { saved.insert(format!("{schema}|{key}"), json!(value)); use_gsettings = true; }
+                Err(error) => {
+                    if kde_tool.is_none() { return Err(error); }
+                    saved.clear();
+                    use_gsettings = false;
+                    break;
+                }
+            }
         }
-        fs::write(backup, serde_json::to_vec(&Value::Object(saved)).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
     }
-    gsettings_set("org.gnome.system.proxy", "mode", "'manual'")?;
-    gsettings_set("org.gnome.system.proxy", "use-same-proxy", "false")?;
-    gsettings_set("org.gnome.system.proxy.socks", "host", "'127.0.0.1'")?;
-    gsettings_set("org.gnome.system.proxy.socks", "port", &port.to_string())?;
-    if engine == "xray" {
-        gsettings_set("org.gnome.system.proxy.http", "host", "''")?;
-        gsettings_set("org.gnome.system.proxy.http", "port", "0")?;
-        gsettings_set("org.gnome.system.proxy.https", "host", "''")?;
-        gsettings_set("org.gnome.system.proxy.https", "port", "0")?;
-    } else {
-        gsettings_set("org.gnome.system.proxy.http", "host", "'127.0.0.1'")?;
-        gsettings_set("org.gnome.system.proxy.http", "port", &port.to_string())?;
-        gsettings_set("org.gnome.system.proxy.https", "host", "'127.0.0.1'")?;
-        gsettings_set("org.gnome.system.proxy.https", "port", &port.to_string())?;
+    if !use_gsettings && kde_tool.is_none() {
+        return Err("Не найдены настройки системного прокси: установите gsettings для GNOME или kwriteconfig для KDE".into());
+    }
+
+    let config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or("Не удалось определить каталог пользовательских настроек Linux")?;
+    let kde_config = config_home.join("kioslaverc");
+    let kde_backup = backup.with_file_name("kioslaverc.original");
+    let kde_existed = kde_tool.is_some() && kde_config.is_file();
+    if kde_tool.is_some() {
+        if kde_existed { fs::copy(&kde_config, &kde_backup).map_err(|e| format!("Не удалось сохранить исходный kioslaverc: {e}"))?; }
+        else { let _ = fs::remove_file(&kde_backup); }
+        saved.insert("kdeConfig".into(), json!(kde_config.to_string_lossy()));
+        saved.insert("kdeBackup".into(), json!(kde_backup.to_string_lossy()));
+        saved.insert("kdeExisted".into(), json!(kde_existed));
+    }
+    if !backup.is_file() {
+        write_private(backup, &serde_json::to_vec(&Value::Object(saved)).map_err(|e| e.to_string())?)?;
+    }
+
+    if use_gsettings {
+        gsettings_set("org.gnome.system.proxy", "mode", "'manual'")?;
+        gsettings_set("org.gnome.system.proxy", "use-same-proxy", "false")?;
+        gsettings_set("org.gnome.system.proxy.socks", "host", "'127.0.0.1'")?;
+        gsettings_set("org.gnome.system.proxy.socks", "port", &port.to_string())?;
+        if engine == "xray" {
+            gsettings_set("org.gnome.system.proxy.http", "host", "''")?;
+            gsettings_set("org.gnome.system.proxy.http", "port", "0")?;
+            gsettings_set("org.gnome.system.proxy.https", "host", "''")?;
+            gsettings_set("org.gnome.system.proxy.https", "port", "0")?;
+        } else {
+            gsettings_set("org.gnome.system.proxy.http", "host", "'127.0.0.1'")?;
+            gsettings_set("org.gnome.system.proxy.http", "port", &port.to_string())?;
+            gsettings_set("org.gnome.system.proxy.https", "host", "'127.0.0.1'")?;
+            gsettings_set("org.gnome.system.proxy.https", "port", &port.to_string())?;
+        }
+    }
+
+    if let Some(tool) = kde_tool {
+        let address = format!("127.0.0.1 {port}");
+        for key in ["httpProxy", "httpsProxy", "ftpProxy"] {
+            let value = if engine == "xray" { String::new() } else { format!("http://{address}") };
+            run_kde_config(&tool, &kde_config, key, &value)?;
+        }
+        run_kde_config(&tool, &kde_config, "socksProxy", &format!("socks://{address}"))?;
+        run_kde_config(&tool, &kde_config, "ProxyType", "1")?;
+        notify_kde_proxy_changed()?;
     }
     Ok(())
 }
@@ -324,18 +401,39 @@ fn restore_linux_system_proxy(backup: &Path) -> Result<(), String> {
     if !backup.is_file() { return Ok(()); }
     let saved: Value = serde_json::from_slice(&fs::read(backup).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Повреждена резервная копия системного прокси: {e}"))?;
-    for key in ["mode", "use-same-proxy"] {
-        if let Some(value) = saved.get(&format!("org.gnome.system.proxy|{key}")).and_then(Value::as_str) {
-            gsettings_set("org.gnome.system.proxy", key, value)?;
+    let mut errors = Vec::new();
+    if find_executable("gsettings").is_some() {
+        for key in ["mode", "use-same-proxy"] {
+            if let Some(value) = saved.get(&format!("org.gnome.system.proxy|{key}")).and_then(Value::as_str) {
+                if let Err(error) = gsettings_set("org.gnome.system.proxy", key, value) { errors.push(error); }
+            }
         }
-    }
-    for schema in ["org.gnome.system.proxy.socks", "org.gnome.system.proxy.http", "org.gnome.system.proxy.https"] {
-        for key in ["host", "port"] {
-            if let Some(value) = saved.get(&format!("{schema}|{key}")).and_then(Value::as_str) {
-                gsettings_set(schema, key, value)?;
+        for schema in ["org.gnome.system.proxy.socks", "org.gnome.system.proxy.http", "org.gnome.system.proxy.https"] {
+            for key in ["host", "port"] {
+                if let Some(value) = saved.get(&format!("{schema}|{key}")).and_then(Value::as_str) {
+                    if let Err(error) = gsettings_set(schema, key, value) { errors.push(error); }
+                }
             }
         }
     }
+    if let (Some(config), Some(backup_copy)) = (
+        saved.get("kdeConfig").and_then(Value::as_str),
+        saved.get("kdeBackup").and_then(Value::as_str),
+    ) {
+        let config = PathBuf::from(config);
+        let backup_copy = PathBuf::from(backup_copy);
+        let existed = saved.get("kdeExisted").and_then(Value::as_bool).unwrap_or(false);
+        let restore = if existed {
+            fs::copy(&backup_copy, &config).map(|_| ()).map_err(|e| format!("Не удалось восстановить kioslaverc: {e}"))
+        } else {
+            fs::remove_file(&config).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(0) } else { Err(e) }).map(|_| ())
+                .map_err(|e| format!("Не удалось удалить временный kioslaverc: {e}"))
+        };
+        if let Err(error) = restore { errors.push(error); }
+        if let Err(error) = notify_kde_proxy_changed() { errors.push(error); }
+        if errors.is_empty() { let _ = fs::remove_file(backup_copy); }
+    }
+    if !errors.is_empty() { return Err(errors.join("; ")); }
     fs::remove_file(backup).map_err(|e| e.to_string())?;
     Ok(())
 }
