@@ -468,6 +468,26 @@ fn doh_parts(routing: &Value) -> (String, u16, String) {
     (host.to_string(), port.parse().unwrap_or(443), format!("/{path}"))
 }
 
+
+fn add_singbox_geosite(rule_sets: &mut Vec<Value>, tag: &str) -> Option<String> {
+    let normalized = tag.trim().strip_prefix("geosite:").unwrap_or(tag).trim().to_ascii_lowercase();
+    if normalized.is_empty() || !normalized.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return None;
+    }
+    let set_tag = format!("geosite-{normalized}");
+    if !rule_sets.iter().any(|set| set.get("tag").and_then(Value::as_str) == Some(set_tag.as_str())) {
+        rule_sets.push(json!({
+            "type":"remote",
+            "tag":set_tag,
+            "format":"binary",
+            "url":format!("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/{set_tag}.srs"),
+            "http_client":{"detour":"direct"},
+            "update_interval":"24h"
+        }));
+    }
+    Some(set_tag)
+}
+
 fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value) -> Result<Value, String> {
     const SUPPORTED: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls", "socks", "http"];
     let obj = outbound.as_object().ok_or("Некорректный outbound JSON")?;
@@ -494,8 +514,8 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     let mut rule_sets: Vec<Value> = Vec::new();
     if route_enabled(routing, "rulesEnabled", true) {
         if route_enabled(routing, "blockAds", false) {
-            rule_sets.push(json!({"type":"remote","tag":"geosite-category-ads-all","format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"direct","update_interval":"24h"}));
-            rules.push(json!({"rule_set":["geosite-category-ads-all"],"action":"reject"}));
+            let ads_tag = add_singbox_geosite(&mut rule_sets, "category-ads-all").unwrap();
+            rules.push(json!({"rule_set":[ads_tag],"action":"reject"}));
         }
         let blocked = route_string_list(routing, "blockDomains");
         let direct = route_string_list(routing, "directDomains");
@@ -503,12 +523,25 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
         if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
         if !direct.is_empty() { rules.push(json!({"domain_suffix":direct,"action":"route","outbound":"direct"})); }
         if !proxied.is_empty() { rules.push(json!({"domain_suffix":proxied,"action":"route","outbound":"proxy"})); }
+
+        let blocked_sites: Vec<String> = route_string_list(routing, "blockGeoSiteTags").iter()
+            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+        let direct_sites: Vec<String> = route_string_list(routing, "directGeoSiteTags").iter()
+            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+        let proxy_sites: Vec<String> = route_string_list(routing, "proxyGeoSiteTags").iter()
+            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+        if !blocked_sites.is_empty() { rules.push(json!({"rule_set":blocked_sites,"action":"reject"})); }
+        if !direct_sites.is_empty() { rules.push(json!({"rule_set":direct_sites,"action":"route","outbound":"direct"})); }
+        if !proxy_sites.is_empty() { rules.push(json!({"rule_set":proxy_sites,"action":"route","outbound":"proxy"})); }
+
         if let Some(country) = route_country(routing) {
-            let site_tag = format!("geosite-{country}");
             let ip_tag = format!("geoip-{country}");
-            rule_sets.push(json!({"type":"remote","tag":site_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/{site_tag}.srs"),"download_detour":"direct","update_interval":"24h"}));
-            rule_sets.push(json!({"type":"remote","tag":ip_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{ip_tag}.srs"),"download_detour":"direct","update_interval":"24h"}));
-            rules.push(json!({"rule_set":[site_tag,ip_tag],"action":"route","outbound":"direct"}));
+            rule_sets.push(json!({
+                "type":"remote","tag":ip_tag,"format":"binary",
+                "url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{ip_tag}.srs"),
+                "http_client":{"detour":"direct"},"update_interval":"24h"
+            }));
+            rules.push(json!({"rule_set":[ip_tag],"action":"route","outbound":"direct"}));
         }
         if route_enabled(routing, "bypassLan", true) {
             rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
@@ -612,8 +645,13 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
         if !blocked.is_empty() { rules.push(json!({"type":"field","domain":blocked.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
         if !direct.is_empty() { rules.push(json!({"type":"field","domain":direct.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
         if !proxied.is_empty() { rules.push(json!({"type":"field","domain":proxied.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
+        let blocked_sites = route_string_list(routing, "blockGeoSiteTags");
+        let direct_sites = route_string_list(routing, "directGeoSiteTags");
+        let proxy_sites = route_string_list(routing, "proxyGeoSiteTags");
+        if !blocked_sites.is_empty() { rules.push(json!({"type":"field","domain":blocked_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
+        if !direct_sites.is_empty() { rules.push(json!({"type":"field","domain":direct_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
+        if !proxy_sites.is_empty() { rules.push(json!({"type":"field","domain":proxy_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
         if let Some(country) = route_country(routing) {
-            rules.push(json!({"type":"field","domain":[format!("geosite:{country}")],"outboundTag":"direct"}));
             rules.push(json!({"type":"field","ip":[format!("geoip:{country}")],"outboundTag":"direct"}));
         }
         if route_enabled(routing, "bypassLan", true) {
