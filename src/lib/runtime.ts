@@ -69,12 +69,24 @@ export async function connect(
     const dnsAddress = routing?.dnsServer === 'google' ? '8.8.8.8' : routing?.dnsServer === 'quad9' ? '9.9.9.9' : '1.1.1.1';
     const dnsServers = routing?.dnsServer === 'system' ? [{ type: 'local', tag: 'dns-remote' }] : [{ type: 'https', tag: 'dns-remote', server: dnsAddress, detour: 'proxy' }];
     const routeRules: Record<string, unknown>[] = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }];
+    const ruleSets: Record<string, unknown>[] = [];
+    const addRouteList = (value: string | undefined, action: 'direct'|'proxy'|'reject') => {
+      const suffixes: string[] = []; const tags: string[] = [];
+      for (const item of domainList(value)) {
+        const geo = item.match(/^(geosite|geoip):([a-z0-9_.-]+)$/i);
+        if (!geo) { suffixes.push(item); continue; }
+        const kind = geo[1].toLowerCase(); const tag = kind + '-' + geo[2].toLowerCase(); tags.push(tag);
+        const source = kind === 'geosite' ? 'sing-geosite' : 'sing-geoip';
+        const url = 'https://raw.githubusercontent.com/SagerNet/' + source + '/rule-set/' + tag + '.srs';
+        if (!ruleSets.some(rule => rule.tag === tag)) ruleSets.push({ type: 'remote', tag, format: 'binary', url, download_detour: 'proxy' });
+      }
+      if (suffixes.length) routeRules.push(action === 'reject' ? { domain_suffix: suffixes, action: 'reject' } : { domain_suffix: suffixes, action: 'route', outbound: action });
+      if (tags.length) routeRules.push(action === 'reject' ? { rule_set: tags, action: 'reject' } : { rule_set: tags, action: 'route', outbound: action });
+    };
     if (routing?.enabled !== false && routing?.bypassLan !== false) routeRules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
     if (routing?.enabled !== false) {
-      const direct = domainList(routing?.directDomains); if (direct.length) routeRules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
-      const proxy = domainList(routing?.proxyDomains); if (proxy.length) routeRules.push({ domain_suffix: proxy, action: 'route', outbound: 'proxy' });
-      const blocked = domainList(routing?.blockDomains); if (blocked.length) routeRules.push({ domain_suffix: blocked, action: 'reject' });
-      if (routing?.blockAds) routeRules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' });
+      addRouteList(routing?.directDomains, 'direct'); addRouteList(routing?.proxyDomains, 'proxy'); addRouteList(routing?.blockDomains, 'reject');
+      if (routing?.blockAds) { ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'proxy' }); routeRules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' }); }
     }
     const routeFinal = routing?.mode === 'direct' ? 'direct' : 'proxy';
     const config = {
@@ -89,7 +101,7 @@ export async function connect(
       route: {
         auto_detect_interface: true,
         default_domain_resolver: { server: 'bootstrap' },
-        rule_set: routing?.blockAds ? [{ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'proxy' }] : [],
+        rule_set: ruleSets,
         rules: routeRules,
         final: routeFinal
       }

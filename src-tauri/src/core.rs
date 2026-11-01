@@ -210,14 +210,28 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) {
         rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
     }
+    let mut rule_sets = Vec::<Value>::new();
     if enabled {
-        for (key, outbound_tag) in [("directDomains", "direct"), ("proxyDomains", "proxy")] {
-            let domains = routing_domains(routing, key);
-            if !domains.is_empty() { rules.push(json!({"domain_suffix":domains,"action":"route","outbound":outbound_tag})); }
+        for (key, outbound_tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "reject")] {
+            let values = routing_domains(routing, key);
+            let mut suffixes = Vec::<String>::new(); let mut tags = Vec::<String>::new();
+            for value in values {
+                if let Some(tag) = value.strip_prefix("geosite:") {
+                    let rule_tag = format!("geosite-{}", tag.to_lowercase()); tags.push(rule_tag.clone());
+                    if !rule_sets.iter().any(|entry| entry["tag"] == rule_tag) { rule_sets.push(json!({"type":"remote","tag":rule_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/{rule_tag}.srs"),"download_detour":"proxy"})); }
+                } else if let Some(tag) = value.strip_prefix("geoip:") {
+                    let rule_tag = format!("geoip-{}", tag.to_lowercase()); tags.push(rule_tag.clone());
+                    if !rule_sets.iter().any(|entry| entry["tag"] == rule_tag) { rule_sets.push(json!({"type":"remote","tag":rule_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{rule_tag}.srs"),"download_detour":"proxy"})); }
+                } else { suffixes.push(value); }
+            }
+            if !suffixes.is_empty() { if outbound_tag == "reject" { rules.push(json!({"domain_suffix":suffixes,"action":"reject"})); } else { rules.push(json!({"domain_suffix":suffixes,"action":"route","outbound":outbound_tag})); } }
+            if !tags.is_empty() { if outbound_tag == "reject" { rules.push(json!({"rule_set":tags,"action":"reject"})); } else { rules.push(json!({"rule_set":tags,"action":"route","outbound":outbound_tag})); } }
         }
-        let blocked = routing_domains(routing, "blockDomains");
-        if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
-        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { rules.push(json!({"rule_set":["geosite-category-ads-all"],"action":"reject"})); }
+        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) {
+            let tag = "geosite-category-ads-all";
+            rule_sets.push(json!({"type":"remote","tag":tag,"format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"proxy"}));
+            rules.push(json!({"rule_set":[tag],"action":"reject"}));
+        }
     }
     let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
     let dns_ip = match dns_server { "google" => "8.8.8.8", "quad9" => "9.9.9.9", _ => "1.1.1.1" };
@@ -225,7 +239,6 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     if dns_server == "system" { dns_servers.push(json!({"type":"local","tag":"remote"})); }
     else { dns_servers.push(json!({"type":"https","tag":"remote","server":dns_ip,"detour":"proxy"})); }
     let final_outbound = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
-    let rule_sets = if enabled && routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { vec![json!({"type":"remote","tag":"geosite-category-ads-all","format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"proxy"})] } else { Vec::<Value>::new() };
     Ok(json!({
         "log":{"level":"info","timestamp":true},
         "dns":{"servers":dns_servers,"final":"remote","strategy":routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4")},
