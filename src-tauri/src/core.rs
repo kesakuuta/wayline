@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -147,6 +147,27 @@ fn binary_path(engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     Err(format!("Не найдено встроенное ядро {default_name}. Переустановите Wayline или проверьте комплектность сборки."))
+}
+
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x08000000);
+}
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
+
+#[tauri::command]
+pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
+    if host.is_empty() || host.chars().any(|c| c.is_control()) || port == 0 {
+        return Err("Некорректный адрес или порт сервера".into());
+    }
+    let address = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?
+        .next().ok_or_else(|| "Адрес сервера не разрешился".to_string())?;
+    let started = Instant::now();
+    TcpStream::connect_timeout(&address, Duration::from_secs(3))
+        .map_err(|e| format!("TCP: {e}"))?;
+    Ok(started.elapsed().as_millis().min(u64::MAX as u128) as u64)
 }
 
 fn open_port() -> Result<u16, String> {
@@ -312,6 +333,7 @@ fn run_xray_config_check(binary: &Path, config: &Path) -> std::io::Result<(Optio
 
     for (arguments, legacy_cli) in attempts {
         let mut command = Command::new(binary);
+        hide_console(&mut command);
         for argument in arguments {
             command.arg(argument);
         }
@@ -480,7 +502,9 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
             Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Проверьте целостность установки и наличие встроенного ядра.", binary.display())); }
         }
     } else {
-        let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()
+        let mut check = Command::new(&binary);
+        hide_console(&mut check);
+        let output = check.arg("check").arg("-c").arg(&config_path).output()
             .map_err(|err| format!("Не удалось запустить sing-box ({}): {err}", binary.display()))?;
         (Some(output), false)
     };
@@ -493,6 +517,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(&binary);
+    hide_console(&mut command);
     if engine == "xray" {
         // Xray resolves geoip.dat/geosite.dat relative to its asset directory.
         // Packaged builds keep the data files beside the executable in resources.
