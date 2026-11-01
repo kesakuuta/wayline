@@ -9,6 +9,7 @@ pub fn run() {
             core::core_disconnect,
             core::core_status,
             core::core_log,
+            core::core_ping,
             core::fetch_subscription
         ])
         .build(tauri::generate_context!())
