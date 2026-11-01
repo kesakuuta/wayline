@@ -367,7 +367,40 @@ fn open_port() -> Result<u16, String> {
     listener.local_addr().map(|addr| addr.port()).map_err(|e| e.to_string())
 }
 
-fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value, String> {
+
+fn route_string_list(routing: &Value, key: &str) -> Vec<String> {
+    let values: Vec<String> = if let Some(items) = routing.get(key).and_then(Value::as_array) {
+        items.iter().filter_map(Value::as_str).map(str::to_string).collect()
+    } else {
+        routing.get(key).and_then(Value::as_str).unwrap_or("")
+            .split(|c| c == '\\n' || c == ',' || c == ';').map(str::to_string).collect()
+    };
+    values.into_iter().map(|item| item.trim().trim_start_matches("*.").trim_start_matches('.').to_ascii_lowercase())
+        .filter(|item| !item.is_empty() && item.len() <= 253 && item.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
+        .take(256).collect()
+}
+
+fn route_enabled(routing: &Value, key: &str, default: bool) -> bool {
+    routing.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn route_country(routing: &Value) -> Option<String> {
+    let value = routing.get("geoCountry").and_then(Value::as_str)?.trim().to_ascii_lowercase();
+    if value.len() == 2 && value.bytes().all(|b| b.is_ascii_lowercase()) { Some(value) } else { None }
+}
+
+fn doh_parts(routing: &Value) -> (String, u16, String) {
+    let value = routing.get("dohUrl").and_then(Value::as_str).unwrap_or("https://cloudflare-dns.com/dns-query");
+    let Some(rest) = value.strip_prefix("https://") else { return ("cloudflare-dns.com".into(), 443, "/dns-query".into()); };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, "dns-query"));
+    let (host, port) = authority.rsplit_once(':').filter(|(_, p)| p.parse::<u16>().is_ok()).unwrap_or((authority, "443"));
+    if host.is_empty() || host.contains('@') || host.chars().any(char::is_control) {
+        return ("cloudflare-dns.com".into(), 443, "/dns-query".into());
+    }
+    (host.to_string(), port.parse().unwrap_or(443), format!("/{path}"))
+}
+
+fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value) -> Result<Value, String> {
     const SUPPORTED: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls", "socks", "http"];
     let obj = outbound.as_object().ok_or("Некорректный outbound JSON")?;
     let protocol = obj.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
@@ -389,28 +422,59 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value
             "auto_redirect":cfg!(target_os="linux")
         }));
     }
+    let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
+    let mut rule_sets: Vec<Value> = Vec::new();
+    if route_enabled(routing, "rulesEnabled", true) {
+        if route_enabled(routing, "blockAds", true) {
+            rule_sets.push(json!({"type":"remote","tag":"geosite-category-ads-all","format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"direct","update_interval":"24h"}));
+            rules.push(json!({"rule_set":["geosite-category-ads-all"],"action":"reject"}));
+        }
+        let blocked = route_string_list(routing, "blockDomains");
+        let direct = route_string_list(routing, "directDomains");
+        let proxied = route_string_list(routing, "proxyDomains");
+        if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
+        if !direct.is_empty() { rules.push(json!({"domain_suffix":direct,"action":"route","outbound":"direct"})); }
+        if !proxied.is_empty() { rules.push(json!({"domain_suffix":proxied,"action":"route","outbound":"proxy"})); }
+        if let Some(country) = route_country(routing) {
+            let site_tag = format!("geosite-{country}");
+            let ip_tag = format!("geoip-{country}");
+            rule_sets.push(json!({"type":"remote","tag":site_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/{site_tag}.srs"),"download_detour":"direct","update_interval":"24h"}));
+            rule_sets.push(json!({"type":"remote","tag":ip_tag,"format":"binary","url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{ip_tag}.srs"),"download_detour":"direct","update_interval":"24h"}));
+            rules.push(json!({"rule_set":[site_tag,ip_tag],"action":"route","outbound":"direct"}));
+        }
+        if route_enabled(routing, "bypassLan", true) {
+            rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
+        }
+    }
+    let (doh_host, doh_port, doh_path) = doh_parts(routing);
+    let dns_route = routing.get("dnsRoute").and_then(Value::as_str).filter(|v| *v == "direct").unwrap_or("proxy");
+    let dns_strategy = routing.get("dnsStrategy").and_then(Value::as_str)
+        .filter(|v| ["prefer_ipv4","prefer_ipv6","ipv4_and_ipv6"].contains(v)).unwrap_or("prefer_ipv4");
+    let final_outbound = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
     Ok(json!({
         "log":{"level":"info","timestamp":true},
         "dns":{
             "servers":[
                 {"type":"local","tag":"bootstrap"},
-                {"type":"udp","tag":"remote","server":"1.1.1.1","detour":"proxy"}
+                {"type":"https","tag":"dns-remote","server":doh_host,"server_port":doh_port,"path":doh_path,"detour":dns_route,"tls":{"enabled":true,"server_name":doh_host}}
             ],
-            "final":"remote", "strategy":"ipv4_only"
+            "final":"dns-remote","strategy":dns_strategy
         },
         "inbounds":inbounds,
         "outbounds":[outbound,{"type":"direct","tag":"direct"}],
         "route":{
             "auto_detect_interface":true,
             "default_domain_resolver":{"server":"bootstrap"},
-            "final":"proxy",
-            "rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"ip_is_private":true,"action":"route","outbound":"direct"}]
-        }
+            "rule_set":rule_sets,
+            "final":final_outbound,
+            "rules":rules
+        },
+        "experimental":{"cache_file":{"enabled":true}}
     }))
 }
 
 
-fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
+fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Value, String> {
     let protocol = outbound.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
     let server = outbound.get("server").and_then(Value::as_str).unwrap_or("");
     let server_port = outbound.get("server_port").and_then(Value::as_u64).unwrap_or(0);
@@ -488,6 +552,35 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
         "outbounds":[proxy,{"protocol":"freedom","tag":"direct"}],
         "routing":{"domainStrategy":"AsIs","rules":[]}
+    }))    let mut proxy = proxy;
+    proxy["tag"] = json!("proxy");
+    let mut rules: Vec<Value> = Vec::new();
+    if route_enabled(routing, "rulesEnabled", true) {
+        if route_enabled(routing, "blockAds", true) {
+            rules.push(json!({"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block"}));
+        }
+        let blocked = route_string_list(routing, "blockDomains");
+        let direct = route_string_list(routing, "directDomains");
+        let proxied = route_string_list(routing, "proxyDomains");
+        if !blocked.is_empty() { rules.push(json!({"type":"field","domain":blocked.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
+        if !direct.is_empty() { rules.push(json!({"type":"field","domain":direct.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
+        if !proxied.is_empty() { rules.push(json!({"type":"field","domain":proxied.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
+        if let Some(country) = route_country(routing) {
+            rules.push(json!({"type":"field","domain":[format!("geosite:{country}")],"outboundTag":"direct"}));
+            rules.push(json!({"type":"field","ip":[format!("geoip:{country}")],"outboundTag":"direct"}));
+        }
+        if route_enabled(routing, "bypassLan", true) {
+            rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"}));
+        }
+    }
+    let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
+    let doh_url = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
+    Ok(json!({
+        "log":{"loglevel":"warning"},
+        "dns":{"servers":[doh_url],"queryStrategy":"UseIPv4"},
+        "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
+        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}],
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"balancers":[],"domainMatcher":"hybrid","final":final_tag}
     }))
 }
 
