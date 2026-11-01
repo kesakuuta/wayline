@@ -46,6 +46,7 @@ def pick_asset(release: dict, predicate, description: str) -> dict:
 
 
 def extract_members(archive: Path, wanted: set[str], temp: Path) -> dict[str, Path]:
+    temp.mkdir(parents=True, exist_ok=True)
     found: dict[str, Path] = {}
     if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as bundle:
