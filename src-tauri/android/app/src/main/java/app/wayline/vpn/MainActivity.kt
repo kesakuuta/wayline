@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.net.TrafficStats
 import android.os.Build
+import android.os.Bundle
 import android.os.Process
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -18,6 +19,11 @@ import java.net.Socket
 import javax.net.ssl.HttpsURLConnection
 
 class MainActivity : TauriActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WaylineVpnService.recoverStaleState(this)
+    }
+
     private var pendingConfig: String? = null
     private var pendingMode: String = WaylineVpnService.MODE_TUN
 
