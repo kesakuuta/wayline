@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.VpnService
+import android.net.ProxyInfo
 import android.util.Log
 import android.os.Build
 import android.os.Handler
@@ -162,7 +163,10 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         val builder = service.Builder().setSession("Wayline")
         val mtu = call(options, "getMtu") as? Number
         if (mtu != null && mtu.toInt() > 0) builder.setMtu(mtu.toInt())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+            if (service.isSystemProxyMode()) builder.setHttpProxy(ProxyInfo.buildDirectProxy("127.0.0.1", 2080))
+        }
 
         val ipv4AddressCount = addAddressList(builder, options, "getInet4Address")
         val ipv6AddressCount = addAddressList(builder, options, "getInet6Address")

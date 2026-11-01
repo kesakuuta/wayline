@@ -72,12 +72,8 @@ class MainActivity : TauriActivity() {
                 .putString(WaylineVpnService.KEY_MODE, pendingMode)
                 .apply()
             runOnUiThread {
-                if (pendingMode == WaylineVpnService.MODE_PROXY) {
-                    startVpn(pendingConfig, pendingMode)
-                } else {
-                    val permission = VpnService.prepare(this@MainActivity)
-                    if (permission == null) startVpn(pendingConfig, pendingMode) else vpnPermission.launch(permission)
-                }
+                val permission = VpnService.prepare(this@MainActivity)
+                if (permission == null) startVpn(pendingConfig, pendingMode) else vpnPermission.launch(permission)
             }
             return "connecting"
         }
