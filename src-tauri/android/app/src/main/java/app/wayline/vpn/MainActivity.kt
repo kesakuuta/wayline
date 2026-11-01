@@ -4,10 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.VpnService
-import android.net.TrafficStats
 import android.os.Build
 import android.os.Bundle
-import android.os.Process
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -120,8 +118,6 @@ class MainActivity : TauriActivity() {
                 .put("mode", mode ?: JSONObject.NULL)
                 .put("port", if (running && mode == WaylineVpnService.MODE_PROXY) 2080 else JSONObject.NULL)
                 .put("uptimeSeconds", if (running && started > 0) ((System.currentTimeMillis() - started) / 1000) else 0)
-                .put("rxBytes", sessionTraffic(prefs.getLong(WaylineVpnService.KEY_RX_START, -1L), TrafficStats.getUidRxBytes(Process.myUid()), running))
-                .put("txBytes", sessionTraffic(prefs.getLong(WaylineVpnService.KEY_TX_START, -1L), TrafficStats.getUidTxBytes(Process.myUid()), running))
                 .put("verification", if (running) "unverified" else JSONObject.NULL)
                 .put("engine", if (running || connecting) "sing-box" else JSONObject.NULL)
                 .put("error", prefs.getString(WaylineVpnService.KEY_ERROR, null) ?: JSONObject.NULL)
@@ -195,9 +191,14 @@ class MainActivity : TauriActivity() {
             }
         }
 
-        private fun sessionTraffic(start: Long, current: Long, running: Boolean): Any {
-            if (!running || start < 0 || current < 0) return JSONObject.NULL
-            return (current - start).coerceAtLeast(0L)
+        @JavascriptInterface
+        fun coreLog(): String {
+            return runCatching {
+                val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "3000", "WaylineLibbox:I", "WaylineVpnService:E", "AndroidRuntime:E", "*:S"))
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                process.waitFor()
+                output.takeLast(24_000).ifBlank { "Android sing-box не оставил диагностических сообщений." }
+            }.getOrElse { "Не удалось прочитать Android logcat: ${it.message}" }
         }
     }
 }

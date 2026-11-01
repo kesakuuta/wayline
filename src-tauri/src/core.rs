@@ -136,7 +136,8 @@ fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, 
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let verb: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
     let file: Vec<u16> = executable.as_os_str().encode_wide().chain(Some(0)).collect();
-    let result = unsafe { ShellExecuteW(null_mut(), verb.as_ptr(), file.as_ptr(), null_mut(), null_mut(), 1) };
+    let directory: Vec<u16> = executable.parent().unwrap_or_else(|| Path::new(".")).as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe { ShellExecuteW(null_mut(), verb.as_ptr(), file.as_ptr(), null_mut(), directory.as_ptr(), 1) };
     if result <= 32 {
         let _ = fs::remove_file(&pending);
         return Err("Windows не выдал права администратора. Повторите запуск TUN и подтвердите запрос UAC.".into());
@@ -611,59 +612,68 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
     let mut rule_sets: Vec<Value> = Vec::new();
     if route_enabled(routing, "rulesEnabled", true) {
-        if route_enabled(routing, "blockAds", false) {
+        if route_enabled(routing, "geoSiteRulesEnabled", true) && route_enabled(routing, "blockAds", false) {
             let ads_tag = add_singbox_geosite(&mut rule_sets, "category-ads-all").unwrap();
             rules.push(json!({"rule_set":[ads_tag],"action":"reject"}));
         }
-        let blocked = route_string_list(routing, "blockDomains");
-        let direct = route_string_list(routing, "directDomains");
-        let proxied = route_string_list(routing, "proxyDomains");
-        if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
-        if !direct.is_empty() { rules.push(json!({"domain_suffix":direct,"action":"route","outbound":"direct"})); }
-        if !proxied.is_empty() { rules.push(json!({"domain_suffix":proxied,"action":"route","outbound":"proxy"})); }
-
-        let blocked_sites: Vec<String> = route_string_list(routing, "blockGeoSiteTags").iter()
-            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
-        let direct_sites: Vec<String> = route_string_list(routing, "directGeoSiteTags").iter()
-            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
-        let proxy_sites: Vec<String> = route_string_list(routing, "proxyGeoSiteTags").iter()
-            .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
-        if !blocked_sites.is_empty() { rules.push(json!({"rule_set":blocked_sites,"action":"reject"})); }
-        if !direct_sites.is_empty() { rules.push(json!({"rule_set":direct_sites,"action":"route","outbound":"direct"})); }
-        if !proxy_sites.is_empty() { rules.push(json!({"rule_set":proxy_sites,"action":"route","outbound":"proxy"})); }
-
-        if let Some(country) = route_country(routing) {
-            let ip_tag = format!("geoip-{country}");
-            rule_sets.push(json!({
-                "type":"remote","tag":ip_tag,"format":"binary",
-                "url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{ip_tag}.srs"),
-                "http_client":{"detour":"direct"},"update_interval":"24h"
-            }));
-            rules.push(json!({"rule_set":[ip_tag],"action":"route","outbound":"direct"}));
+        if route_enabled(routing, "domainRulesEnabled", true) {
+            let blocked = route_string_list(routing, "blockDomains");
+            let direct = route_string_list(routing, "directDomains");
+            let proxied = route_string_list(routing, "proxyDomains");
+            if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
+            if !direct.is_empty() { rules.push(json!({"domain_suffix":direct,"action":"route","outbound":"direct"})); }
+            if !proxied.is_empty() { rules.push(json!({"domain_suffix":proxied,"action":"route","outbound":"proxy"})); }
+        }
+        if route_enabled(routing, "geoSiteRulesEnabled", true) {
+            let blocked_sites: Vec<String> = route_string_list(routing, "blockGeoSiteTags").iter()
+                .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+            let direct_sites: Vec<String> = route_string_list(routing, "directGeoSiteTags").iter()
+                .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+            let proxy_sites: Vec<String> = route_string_list(routing, "proxyGeoSiteTags").iter()
+                .filter_map(|tag| add_singbox_geosite(&mut rule_sets, tag)).collect();
+            if !blocked_sites.is_empty() { rules.push(json!({"rule_set":blocked_sites,"action":"reject"})); }
+            if !direct_sites.is_empty() { rules.push(json!({"rule_set":direct_sites,"action":"route","outbound":"direct"})); }
+            if !proxy_sites.is_empty() { rules.push(json!({"rule_set":proxy_sites,"action":"route","outbound":"proxy"})); }
+        }
+        if route_enabled(routing, "geoIpRulesEnabled", true) {
+            if let Some(country) = route_country(routing) {
+                let ip_tag = format!("geoip-{country}");
+                rule_sets.push(json!({
+                    "type":"remote","tag":ip_tag,"format":"binary",
+                    "url":format!("https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/{ip_tag}.srs"),
+                    "http_client":{"detour":"direct"},"update_interval":"24h"
+                }));
+                rules.push(json!({"rule_set":[ip_tag],"action":"route","outbound":"direct"}));
+            }
         }
         if route_enabled(routing, "bypassLan", true) {
             rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
         }
     }
     let (doh_host, doh_port, doh_path) = doh_parts(routing);
+    let doh_enabled = route_enabled(routing, "dohEnabled", true);
     let dns_route = routing.get("dnsRoute").and_then(Value::as_str).filter(|v| *v == "direct").unwrap_or("proxy");
     let dns_strategy = routing.get("dnsStrategy").and_then(Value::as_str)
         .filter(|v| ["prefer_ipv4","prefer_ipv6","ipv4_and_ipv6"].contains(v)).unwrap_or("prefer_ipv4");
+    let dns_servers = if doh_enabled {
+        json!([
+            {"type":"local","tag":"bootstrap"},
+            {"type":"https","tag":"dns-remote","server":doh_host,"server_port":doh_port,"path":doh_path,"detour":dns_route,"tls":{"enabled":true,"server_name":doh_host}}
+        ])
+    } else {
+        json!([{"type":"local","tag":"system"}])
+    };
+    let dns_final = if doh_enabled { "dns-remote" } else { "system" };
+    let resolver = if doh_enabled { "bootstrap" } else { "system" };
     let final_outbound = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
     Ok(json!({
         "log":{"level":"info","timestamp":true},
-        "dns":{
-            "servers":[
-                {"type":"local","tag":"bootstrap"},
-                {"type":"https","tag":"dns-remote","server":doh_host,"server_port":doh_port,"path":doh_path,"detour":dns_route,"tls":{"enabled":true,"server_name":doh_host}}
-            ],
-            "final":"dns-remote","strategy":dns_strategy
-        },
+        "dns":{"servers":dns_servers,"final":dns_final,"strategy":dns_strategy},
         "inbounds":inbounds,
         "outbounds":[outbound,{"type":"direct","tag":"direct"}],
         "route":{
             "auto_detect_interface":true,
-            "default_domain_resolver":{"server":"bootstrap"},
+            "default_domain_resolver":{"server":resolver},
             "rule_set":rule_sets,
             "final":final_outbound,
             "rules":rules
@@ -734,23 +744,29 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     proxy["tag"] = json!("proxy");
     let mut rules: Vec<Value> = Vec::new();
     if route_enabled(routing, "rulesEnabled", true) {
-        if route_enabled(routing, "blockAds", true) {
+        if route_enabled(routing, "geoSiteRulesEnabled", true) && route_enabled(routing, "blockAds", false) {
             rules.push(json!({"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block"}));
         }
-        let blocked = route_string_list(routing, "blockDomains");
-        let direct = route_string_list(routing, "directDomains");
-        let proxied = route_string_list(routing, "proxyDomains");
-        if !blocked.is_empty() { rules.push(json!({"type":"field","domain":blocked.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
-        if !direct.is_empty() { rules.push(json!({"type":"field","domain":direct.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
-        if !proxied.is_empty() { rules.push(json!({"type":"field","domain":proxied.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
-        let blocked_sites = route_string_list(routing, "blockGeoSiteTags");
-        let direct_sites = route_string_list(routing, "directGeoSiteTags");
-        let proxy_sites = route_string_list(routing, "proxyGeoSiteTags");
-        if !blocked_sites.is_empty() { rules.push(json!({"type":"field","domain":blocked_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
-        if !direct_sites.is_empty() { rules.push(json!({"type":"field","domain":direct_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
-        if !proxy_sites.is_empty() { rules.push(json!({"type":"field","domain":proxy_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
-        if let Some(country) = route_country(routing) {
-            rules.push(json!({"type":"field","ip":[format!("geoip:{country}")],"outboundTag":"direct"}));
+        if route_enabled(routing, "domainRulesEnabled", true) {
+            let blocked = route_string_list(routing, "blockDomains");
+            let direct = route_string_list(routing, "directDomains");
+            let proxied = route_string_list(routing, "proxyDomains");
+            if !blocked.is_empty() { rules.push(json!({"type":"field","domain":blocked.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
+            if !direct.is_empty() { rules.push(json!({"type":"field","domain":direct.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
+            if !proxied.is_empty() { rules.push(json!({"type":"field","domain":proxied.iter().map(|d|format!("domain:{d}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
+        }
+        if route_enabled(routing, "geoSiteRulesEnabled", true) {
+            let blocked_sites = route_string_list(routing, "blockGeoSiteTags");
+            let direct_sites = route_string_list(routing, "directGeoSiteTags");
+            let proxy_sites = route_string_list(routing, "proxyGeoSiteTags");
+            if !blocked_sites.is_empty() { rules.push(json!({"type":"field","domain":blocked_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"block"})); }
+            if !direct_sites.is_empty() { rules.push(json!({"type":"field","domain":direct_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"direct"})); }
+            if !proxy_sites.is_empty() { rules.push(json!({"type":"field","domain":proxy_sites.iter().map(|tag|format!("geosite:{tag}")).collect::<Vec<_>>(),"outboundTag":"proxy"})); }
+        }
+        if route_enabled(routing, "geoIpRulesEnabled", true) {
+            if let Some(country) = route_country(routing) {
+                rules.push(json!({"type":"field","ip":[format!("geoip:{country}")],"outboundTag":"direct"}));
+            }
         }
         if route_enabled(routing, "bypassLan", true) {
             rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"}));
@@ -758,6 +774,7 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     }
     let doh_base = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
     let doh_url = if routing.get("dnsRoute").and_then(Value::as_str) == Some("direct") { doh_base.replacen("https://", "https+local://", 1) } else { doh_base.to_string() };
+    let dns_servers = if route_enabled(routing, "dohEnabled", true) { vec![doh_url] } else { vec!["localhost".to_string()] };
     let dns_strategy = match routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4") { "prefer_ipv6" => "UseIPv6", "ipv4_and_ipv6" => "UseIP", _ => "UseIPv4" };
     if routing.get("policy").and_then(Value::as_str) == Some("direct") {
         rules.push(json!({"type":"field","network":"tcp,udp","outboundTag":"direct"}));
@@ -767,7 +784,7 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     let outbounds = vec![proxy, direct, block];
     Ok(json!({
         "log":{"loglevel":"warning"},
-        "dns":{"servers":[doh_url],"queryStrategy":dns_strategy},
+        "dns":{"servers":dns_servers,"queryStrategy":dns_strategy},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
         "outbounds":outbounds,
         "routing":{"domainStrategy":"IPIfNonMatch","rules":rules}
@@ -1169,6 +1186,34 @@ mod tests {
         assert_eq!(cfg["dns"]["servers"][0], "https+local://cloudflare-dns.com/dns-query");
         assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["domain"][0] == "geosite:category-ru"));
         assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["ip"][0] == "geoip:fr"));
+    }
+
+    #[test]
+    fn route_group_switches_disable_rules_and_doh() {
+        let routing = json!({
+            "rulesEnabled": true,
+            "domainRulesEnabled": false,
+            "geoSiteRulesEnabled": false,
+            "geoIpRulesEnabled": false,
+            "dohEnabled": false,
+            "bypassLan": false,
+            "directDomains": "direct.example",
+            "directGeoSiteTags": "category-ru",
+            "geoCountry": "fi",
+            "dohUrl": "https://dns.google/dns-query"
+        });
+        let outbound = json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"});
+        let sing = create_singbox_config(outbound.clone(), "tun", 2080, &routing).unwrap();
+        assert_eq!(sing["dns"]["final"], "system");
+        assert_eq!(sing["dns"]["servers"][0]["type"], "local");
+        let sing_rules = sing["route"]["rules"].as_array().unwrap();
+        assert!(!sing_rules.iter().any(|rule| rule.get("domain_suffix").is_some()));
+        assert!(sing["route"]["rule_set"].as_array().unwrap().is_empty());
+
+        let xray = create_xray_config(outbound, 2080, &routing).unwrap();
+        assert_eq!(xray["dns"]["servers"][0], "localhost");
+        let xray_rules = xray["routing"]["rules"].as_array().unwrap();
+        assert!(!xray_rules.iter().any(|rule| rule.get("domain").is_some() || rule.get("ip").is_some()));
     }
 
     #[test]

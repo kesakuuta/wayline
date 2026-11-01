@@ -7,11 +7,11 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.net.TrafficStats
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 
 class WaylineVpnService : VpnService() {
@@ -22,6 +22,9 @@ class WaylineVpnService : VpnService() {
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "Wayline-Libbox").apply { isDaemon = true }
     }
+    private val stopWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Wayline-VPN-Stop").apply { isDaemon = true }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -30,7 +33,11 @@ class WaylineVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> worker.execute { stopVpn() }
+            ACTION_STOP -> {
+                expectedStop = true
+                saveStatus(running = false, connecting = false, error = null, mode = currentMode)
+                stopWorker.execute { stopVpn() }
+            }
             ACTION_START -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_TUN
@@ -49,6 +56,7 @@ class WaylineVpnService : VpnService() {
                         bridge = activeBridge
                         engine = activeBridge
                         activeBridge.start(config)
+                        if (expectedStop) throw CancellationException("Отключение запрошено во время запуска")
                         val storedError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
                         if (engine !== activeBridge || !storedError.isNullOrBlank()) {
                             throw IllegalStateException(storedError ?: "sing-box остановился во время запуска")
@@ -57,6 +65,7 @@ class WaylineVpnService : VpnService() {
                         saveStatus(running = true, connecting = false, error = null, mode = mode)
                         updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Локальный прокси запущен")
                     } catch (error: Throwable) {
+                        val cancelled = expectedStop || error is CancellationException
                         expectedStop = true
                         runCatching { bridge?.stop() }
                         if (engine === bridge) engine = null
@@ -65,9 +74,10 @@ class WaylineVpnService : VpnService() {
                         saveStatus(
                             running = false,
                             connecting = false,
-                            error = previousError ?: root(error).message ?: root(error).javaClass.simpleName,
+                            error = if (cancelled) null else previousError ?: root(error).message ?: root(error).javaClass.simpleName,
                             mode = mode
                         )
+                        if (!cancelled) android.util.Log.e("WaylineVpnService", "Не удалось запустить sing-box", error)
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf(startId)
                     }
@@ -119,8 +129,6 @@ class WaylineVpnService : VpnService() {
             .putString(KEY_MODE, mode)
             .putInt(KEY_PID, Process.myPid())
             .putLong(KEY_STARTED, if (running) startedAt else 0L)
-            .putLong(KEY_RX_START, if (running) TrafficStats.getUidRxBytes(Process.myUid()) else -1L)
-            .putLong(KEY_TX_START, if (running) TrafficStats.getUidTxBytes(Process.myUid()) else -1L)
             .apply()
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName))
     }
@@ -153,7 +161,9 @@ class WaylineVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        worker.execute { stopVpn() }
+        expectedStop = true
+        saveStatus(running = false, connecting = false, error = null, mode = currentMode)
+        stopWorker.execute { stopVpn() }
         super.onRevoke()
     }
 
@@ -165,7 +175,8 @@ class WaylineVpnService : VpnService() {
         startedAt = 0L
         val lastError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
         saveStatus(running = false, connecting = false, error = lastError, mode = currentMode)
-        worker.shutdown()
+        worker.shutdownNow()
+        stopWorker.shutdownNow()
         super.onDestroy()
     }
 
@@ -185,8 +196,6 @@ class WaylineVpnService : VpnService() {
         const val KEY_CONNECTING = "connecting"
         const val KEY_ERROR = "error"
         const val KEY_STARTED = "started_at"
-        const val KEY_RX_START = "rx_start"
-        const val KEY_TX_START = "tx_start"
         const val KEY_MODE = "mode"
         const val KEY_PID = "process_id"
 
@@ -201,8 +210,6 @@ class WaylineVpnService : VpnService() {
                     .putBoolean(KEY_CONNECTING, false)
                     .putString(KEY_ERROR, "Предыдущее подключение было прервано. Подключитесь снова.")
                     .putLong(KEY_STARTED, 0L)
-                    .putLong(KEY_RX_START, -1L)
-                    .putLong(KEY_TX_START, -1L)
                     .putInt(KEY_PID, currentPid)
                     .apply()
             }

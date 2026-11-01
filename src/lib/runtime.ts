@@ -2,8 +2,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export type CoreMode = 'tun' | 'proxy';
 export type CoreEngine = 'xray' | 'sing-box';
-export type RouteSettings = { policy:'rules'|'direct'; rulesEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; directGeoSiteTags:string; proxyGeoSiteTags:string; blockGeoSiteTags:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
-export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, bypassLan:true, blockAds:false, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', directGeoSiteTags:'', proxyGeoSiteTags:'', blockGeoSiteTags:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
+export type RouteSettings = { policy:'rules'|'direct'; rulesEnabled:boolean; domainRulesEnabled:boolean; geoSiteRulesEnabled:boolean; geoIpRulesEnabled:boolean; dohEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; directGeoSiteTags:string; proxyGeoSiteTags:string; blockGeoSiteTags:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
+export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, domainRulesEnabled:true, geoSiteRulesEnabled:true, geoIpRulesEnabled:true, dohEnabled:true, bypassLan:true, blockAds:false, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', directGeoSiteTags:'', proxyGeoSiteTags:'', blockGeoSiteTags:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
 export function loadRouteSettings():RouteSettings { try { const saved=JSON.parse(localStorage.getItem('wayline.routing.v1')||'{}'); const result={...defaultRouteSettings,...saved}; if(result.policy!=='direct') result.policy='rules'; return result as RouteSettings; } catch { return defaultRouteSettings; } }
 const domainList=(value:string)=>value.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x && /^[a-z0-9*._-]+$/.test(x)).slice(0,256);
 export type CoreStatus = {
@@ -12,8 +12,6 @@ export type CoreStatus = {
   mode: CoreMode | null;
   port: number | null;
   uptimeSeconds: number | null;
-  rxBytes?: number | null;
-  txBytes?: number | null;
   verification: 'checking' | 'verified' | 'unverified' | null;
   engine: CoreEngine | null;
   error: string | null;
@@ -27,6 +25,7 @@ declare global {
       readClipboard(): string;
       fetchSubscription(url: string): string;
       ping(host: string, port: number): number;
+      coreLog(): string;
     };
   }
 }
@@ -74,16 +73,18 @@ export async function connect(
     ];
     const ruleSets: Record<string, unknown>[] = [];
     if (routing.rulesEnabled) {
-      if (routing.blockAds) {
+      if (routing.geoSiteRulesEnabled && routing.blockAds) {
         ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
         rules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' });
       }
-      const blocked = domainList(routing.blockDomains);
-      const direct = domainList(routing.directDomains);
-      const proxied = domainList(routing.proxyDomains);
-      if (blocked.length) rules.push({ domain_suffix: blocked, action: 'reject' });
-      if (direct.length) rules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
-      if (proxied.length) rules.push({ domain_suffix: proxied, action: 'route', outbound: 'proxy' });
+      if (routing.domainRulesEnabled) {
+        const blocked = domainList(routing.blockDomains);
+        const direct = domainList(routing.directDomains);
+        const proxied = domainList(routing.proxyDomains);
+        if (blocked.length) rules.push({ domain_suffix: blocked, action: 'reject' });
+        if (direct.length) rules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
+        if (proxied.length) rules.push({ domain_suffix: proxied, action: 'route', outbound: 'proxy' });
+      }
       const addGeoSite = (tag: string) => {
         const normalized = tag.toLowerCase().replace(/^geosite:/, '').replace(/[^a-z0-9_-]/g, '');
         if (!normalized) return null;
@@ -91,14 +92,16 @@ export async function connect(
         if (!ruleSets.some(set => set.tag === setTag)) ruleSets.push({ type: 'remote', tag: setTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/' + setTag + '.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
         return setTag;
       };
-      const blockedSites = domainList(routing.blockGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
-      const directSites = domainList(routing.directGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
-      const proxySites = domainList(routing.proxyGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
-      if (blockedSites.length) rules.push({ rule_set: blockedSites, action: 'reject' });
-      if (directSites.length) rules.push({ rule_set: directSites, action: 'route', outbound: 'direct' });
-      if (proxySites.length) rules.push({ rule_set: proxySites, action: 'route', outbound: 'proxy' });
+      if (routing.geoSiteRulesEnabled) {
+        const blockedSites = domainList(routing.blockGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+        const directSites = domainList(routing.directGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+        const proxySites = domainList(routing.proxyGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+        if (blockedSites.length) rules.push({ rule_set: blockedSites, action: 'reject' });
+        if (directSites.length) rules.push({ rule_set: directSites, action: 'route', outbound: 'direct' });
+        if (proxySites.length) rules.push({ rule_set: proxySites, action: 'route', outbound: 'proxy' });
+      }
       const country = routing.geoCountry.trim().toLowerCase();
-      if (/^[a-z]{2}$/.test(country)) {
+      if (routing.geoIpRulesEnabled && /^[a-z]{2}$/.test(country)) {
         const ipTag = 'geoip-' + country;
         ruleSets.push({ type: 'remote', tag: ipTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/' + ipTag + '.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
         rules.push({ rule_set: [ipTag], action: 'route', outbound: 'direct' });
@@ -108,21 +111,28 @@ export async function connect(
     let doh: URL;
     try { doh = new URL(routing.dohUrl); if (doh.protocol !== 'https:') throw new Error('HTTPS required'); }
     catch { doh = new URL(defaultRouteSettings.dohUrl); }
+    const dns = routing.dohEnabled
+      ? {
+          servers: [
+            { type: 'local', tag: 'bootstrap' },
+            { type: 'https', tag: 'dns-remote', server: doh.hostname, server_port: Number(doh.port) || 443, path: doh.pathname + doh.search, detour: routing.dnsRoute, tls: { enabled: true, server_name: doh.hostname } }
+          ],
+          final: 'dns-remote',
+          strategy: routing.dnsStrategy
+        }
+      : {
+          servers: [{ type: 'local', tag: 'system' }],
+          final: 'system',
+          strategy: routing.dnsStrategy
+        };
     const config = {
       log: { level: 'info', timestamp: true },
-      dns: {
-        servers: [
-          { type: 'local', tag: 'bootstrap' },
-          { type: 'https', tag: 'dns-remote', server: doh.hostname, server_port: Number(doh.port) || 443, path: doh.pathname + doh.search, detour: routing.dnsRoute, tls: { enabled: true, server_name: doh.hostname } }
-        ],
-        final: 'dns-remote',
-        strategy: routing.dnsStrategy
-      },
+      dns,
       inbounds,
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: {
         auto_detect_interface: true,
-        default_domain_resolver: { server: 'bootstrap' },
+        default_domain_resolver: { server: routing.dohEnabled ? 'bootstrap' : 'system' },
         rule_set: ruleSets,
         rules,
         final: routing.policy === 'direct' ? 'direct' : 'proxy'
@@ -130,21 +140,8 @@ export async function connect(
       experimental: { cache_file: { enabled: true } }
     };
     android.connect(JSON.stringify(config), mode);
-    // Do not report "connected" merely because the Android service request was queued.
-    // Wait for VpnService + libbox to either reach running state or return a real error.
-    const deadline = Date.now() + 30_000;
-    let current = androidStatus();
-    while (current.connecting && Date.now() < deadline) {
-      await new Promise<void>(resolve => window.setTimeout(resolve, 350));
-      current = androidStatus();
-    }
-    if (current.connecting) {
-      throw new Error('Android VPN всё ещё запускается. Проверьте уведомление и журнал Android.');
-    }
-    if (!current.running) {
-      throw new Error(current.error || 'sing-box не смог запустить VPN-службу.');
-    }
-    return current;
+    // Return immediately so the UI can poll status and let the user cancel startup.
+    return androidStatus();
   }
   requireDesktop();
   return invoke<CoreStatus>('core_connect', { outbound, mode, engine, routing });
@@ -152,7 +149,14 @@ export async function connect(
 export async function disconnect(): Promise<CoreStatus> {
   if (isAndroidNative()) {
     window.WaylineAndroid?.disconnect();
-    return androidStatus();
+    const deadline = Date.now() + 8_000;
+    let current = androidStatus();
+    while ((current.running || current.connecting) && Date.now() < deadline) {
+      await new Promise<void>(resolve => window.setTimeout(resolve, 150));
+      current = androidStatus();
+    }
+    if (current.running || current.connecting) throw new Error('Android VPN-служба ещё завершает остановку. Повторите отключение.');
+    return current;
   }
   requireDesktop();
   return invoke<CoreStatus>('core_disconnect');
@@ -181,7 +185,7 @@ export async function readClipboard(): Promise<string> {
   }
 }
 export async function coreLog(): Promise<string> {
-  if (isAndroidNative()) return 'Журнал Android sing-box пока доступен только через системный logcat.';
+  if (isAndroidNative()) return window.WaylineAndroid?.coreLog?.() ?? 'Журнал Android недоступен.';
   requireDesktop();
   return invoke<string>('core_log');
 }

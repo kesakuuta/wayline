@@ -32,15 +32,15 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     }
 
     private val boxPackage = "io.nekohasekai.libbox."
-    private var commandServer: Any? = null
-    private var tunDescriptor: ParcelFileDescriptor? = null
+    @Volatile private var commandServer: Any? = null
+    @Volatile private var tunDescriptor: ParcelFileDescriptor? = null
+    @Volatile private var stopRequested = false
     private var defaultInterfaceCallback: ConnectivityManager.NetworkCallback? = null
     private var networkCallbackThread: HandlerThread? = null
 
-    @Synchronized
     fun start(configJson: String) {
         require(configJson.isNotBlank()) { "sing-box config is empty" }
-        stop()
+        if (stopRequested) throw java.util.concurrent.CancellationException("VPN startup cancelled")
 
         val loader = service.classLoader ?: javaClass.classLoader!!
         val libbox = load("Libbox", loader)
@@ -139,7 +139,10 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             ?: throw IllegalStateException("В libbox не найден CommandServer(handler, platform)")
         val server = invoke(constructor, handler, platform)
             ?: throw IllegalStateException("Не удалось создать CommandServer")
+        commandServer = server
+        if (stopRequested) throw java.util.concurrent.CancellationException("VPN startup cancelled")
         invoke(server.javaClass.methods.first { it.name.equals("start", true) && it.parameterTypes.isEmpty() }, server)
+        if (stopRequested) throw java.util.concurrent.CancellationException("VPN startup cancelled")
 
         try {
             val overrideType = load("OverrideOptions", loader)
@@ -150,6 +153,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     it.parameterTypes[0] == String::class.java
             } ?: throw IllegalStateException("В libbox не найден StartOrReloadService(config, OverrideOptions)")
             invoke(start, server, configJson, overrideOptions)
+            if (stopRequested) throw java.util.concurrent.CancellationException("VPN startup cancelled")
             commandServer = server
         } catch (error: Throwable) {
             runCatching { server.javaClass.methods.first { it.name.equals("closeService", true) }.invoke(server) }
@@ -160,6 +164,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     }
 
     private fun openTun(options: Any): Int {
+        if (stopRequested) throw java.util.concurrent.CancellationException("VPN startup cancelled")
         if (VpnService.prepare(service) != null) {
             throw IllegalStateException("Android VPN permission has not been granted")
         }
@@ -211,8 +216,12 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
 
         val descriptor = builder.establish()
             ?: throw IllegalStateException("Android не выдал VPN-интерфейс (разрешение отозвано?)")
+        if (stopRequested) {
+            descriptor.close()
+            throw java.util.concurrent.CancellationException("VPN startup cancelled")
+        }
         tunDescriptor = descriptor
-        return descriptor.fd
+        return ParcelFileDescriptor.dup(descriptor.fileDescriptor).detachFd()
     }
 
     private fun findConnectionOwner(args: Array<out Any?>?): Int {
@@ -496,8 +505,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         else -> null
     }
 
-    @Synchronized
     internal fun releaseAfterCoreStopped() {
+        stopRequested = true
         val server = commandServer
         commandServer = null
         if (server != null) {
@@ -516,8 +525,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         closeTun()
     }
 
-    @Synchronized
     fun stop() {
+        stopRequested = true
         commandServer?.let { server ->
             runCatching { server.javaClass.methods.first { it.name.equals("closeService", true) && it.parameterTypes.isEmpty() }.invoke(server) }
             runCatching { server.javaClass.methods.first { it.name.equals("close", true) && it.parameterTypes.isEmpty() }.invoke(server) }
