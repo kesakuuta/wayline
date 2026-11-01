@@ -11,6 +11,11 @@ pub fn run() {
             core::core_log,
             core::core_ping,
             core::core_take_pending_connect,
+            core::core_backup_directory,
+            core::core_backup_list,
+            core::core_backup_create,
+            core::core_backup_restore,
+            core::core_backup_delete,
             core::fetch_subscription
         ])
         .build(tauri::generate_context!())
