@@ -2,8 +2,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export type CoreMode = 'tun' | 'proxy';
 export type CoreEngine = 'xray' | 'sing-box';
-export type RouteSettings = { policy:'rules'|'direct'; rulesEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
-export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, bypassLan:true, blockAds:false, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
+export type RouteSettings = { policy:'rules'|'direct'; rulesEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; directGeoSiteTags:string; proxyGeoSiteTags:string; blockGeoSiteTags:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
+export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, bypassLan:true, blockAds:false, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', directGeoSiteTags:'', proxyGeoSiteTags:'', blockGeoSiteTags:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
 export function loadRouteSettings():RouteSettings { try { const saved=JSON.parse(localStorage.getItem('wayline.routing.v1')||'{}'); return {...defaultRouteSettings,...saved}; } catch { return defaultRouteSettings; } }
 const domainList=(value:string)=>value.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x && /^[a-z0-9*._-]+$/.test(x)).slice(0,256);
 export type CoreStatus = {
@@ -75,7 +75,7 @@ export async function connect(
     const ruleSets: Record<string, unknown>[] = [];
     if (routing.rulesEnabled) {
       if (routing.blockAds) {
-        ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'direct', update_interval: '24h' });
+        ruleSets.push({ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
         rules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' });
       }
       const blocked = domainList(routing.blockDomains);
@@ -84,13 +84,24 @@ export async function connect(
       if (blocked.length) rules.push({ domain_suffix: blocked, action: 'reject' });
       if (direct.length) rules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
       if (proxied.length) rules.push({ domain_suffix: proxied, action: 'route', outbound: 'proxy' });
+      const addGeoSite = (tag: string) => {
+        const normalized = tag.toLowerCase().replace(/^geosite:/, '').replace(/[^a-z0-9_-]/g, '');
+        if (!normalized) return null;
+        const setTag = 'geosite-' + normalized;
+        if (!ruleSets.some(set => set.tag === setTag)) ruleSets.push({ type: 'remote', tag: setTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/' + setTag + '.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
+        return setTag;
+      };
+      const blockedSites = domainList(routing.blockGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+      const directSites = domainList(routing.directGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+      const proxySites = domainList(routing.proxyGeoSiteTags).map(addGeoSite).filter(Boolean) as string[];
+      if (blockedSites.length) rules.push({ rule_set: blockedSites, action: 'reject' });
+      if (directSites.length) rules.push({ rule_set: directSites, action: 'route', outbound: 'direct' });
+      if (proxySites.length) rules.push({ rule_set: proxySites, action: 'route', outbound: 'proxy' });
       const country = routing.geoCountry.trim().toLowerCase();
       if (/^[a-z]{2}$/.test(country)) {
-        const siteTag = 'geosite-' + country;
         const ipTag = 'geoip-' + country;
-        ruleSets.push({ type: 'remote', tag: siteTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/' + siteTag + '.srs', download_detour: 'direct', update_interval: '24h' });
-        ruleSets.push({ type: 'remote', tag: ipTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/' + ipTag + '.srs', download_detour: 'direct', update_interval: '24h' });
-        rules.push({ rule_set: [siteTag, ipTag], action: 'route', outbound: 'direct' });
+        ruleSets.push({ type: 'remote', tag: ipTag, format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/' + ipTag + '.srs', http_client: { detour: 'direct' }, update_interval: '24h' });
+        rules.push({ rule_set: [ipTag], action: 'route', outbound: 'direct' });
       }
       if (routing.bypassLan) rules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
     }
