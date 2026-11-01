@@ -233,4 +233,5 @@ input, textarea, select, [contenteditable="true"] {
 .bg-custom .surface-card,.bg-custom .server-list,.bg-custom .selected-server-card,.bg-custom .filter-panel,.bg-custom .protection-chip,.bg-custom .settings-drawer{background:rgba(9,17,28,.74);color:#f7fbff;border-color:#ffffff42;backdrop-filter:blur(calc(var(--blur) + 8px));-webkit-backdrop-filter:blur(calc(var(--blur) + 8px))}
 .bg-custom .surface-card :is(h2,h3,strong,span,p),.bg-custom .server-row,.bg-custom .selected-server-card,.bg-custom .protection-chip{color:#f7fbff}
 .bg-custom .surface-card :is(small,.eyebrow),.bg-custom .server-row small,.bg-custom .selected-server-card small{color:#d4e0eb}
+.bg-custom .server-list{background:color-mix(in srgb,#09111c var(--list-opacity,70%),transparent)!important}
 .core-log{user-select:text!important;-webkit-user-select:text!important;cursor:text!important}
