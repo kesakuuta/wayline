@@ -53,7 +53,7 @@ export async function connect(
     // Android's system proxy is published through VpnService.Builder.setHttpProxy,
     // so both UI modes need a VPN interface. Proxy mode additionally configures
     // Android's per-VPN HTTP proxy for apps that honour system proxy settings.
-    const inbounds = [{ type: 'tun', tag: 'tun-in', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1500, auto_route: true, stack: 'system' }];
+    const inbounds = [{ type: 'tun', tag: 'tun-in', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1500, auto_route: true, stack: 'system' }, ...(mode === 'proxy' ? [{ type: 'mixed', tag: 'local', listen: '127.0.0.1', listen_port: 2080 }] : [])];
     const domainList = (value?: string) => (value ?? '').split(/[\n,;]+/).map(v => v.trim().replace(/^\./, '')).filter(v => v && !/[\s\x00-\x1f]/.test(v));
     const dnsAddress = routing?.dnsServer === 'google' ? '8.8.8.8' : routing?.dnsServer === 'quad9' ? '9.9.9.9' : '1.1.1.1';
     const dnsServers = routing?.dnsServer === 'system' ? [{ type: 'local', tag: 'dns-remote' }] : [{ type: 'https', tag: 'dns-remote', server: dnsAddress, detour: 'proxy' }];
