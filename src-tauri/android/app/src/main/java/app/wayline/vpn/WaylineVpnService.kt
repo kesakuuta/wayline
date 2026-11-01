@@ -128,7 +128,7 @@ class WaylineVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("Wayline VPN")
+            .setContentTitle("Wayline")
             .setContentText(status)
             .setContentIntent(openApp)
             .setOngoing(true)
