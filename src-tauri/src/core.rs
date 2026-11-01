@@ -175,7 +175,15 @@ fn open_port() -> Result<u16, String> {
     listener.local_addr().map(|addr| addr.port()).map_err(|e| e.to_string())
 }
 
-fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value, String> {
+fn routing_domains(settings: &Value, key: &str) -> Vec<String> {
+    settings.get(key).and_then(Value::as_str).unwrap_or("")
+        .split(|c: char| c == '\\n' || c == ',' || c == ';')
+        .map(str::trim).map(|s| s.trim_start_matches('.'))
+        .filter(|s| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control()))
+        .map(str::to_string).collect()
+}
+
+fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value) -> Result<Value, String> {
     const SUPPORTED: &[&str] = &["vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls", "socks", "http"];
     let obj = outbound.as_object().ok_or("Некорректный outbound JSON")?;
     let protocol = obj.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
@@ -197,28 +205,38 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value
             "auto_redirect":cfg!(target_os="linux")
         }));
     }
+    let enabled = routing.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
+    if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) {
+        rules.push(json!({"ip_is_private":true,"action":"route","outbound":"direct"}));
+    }
+    if enabled {
+        for (key, outbound_tag) in [("directDomains", "direct"), ("proxyDomains", "proxy")] {
+            let domains = routing_domains(routing, key);
+            if !domains.is_empty() { rules.push(json!({"domain_suffix":domains,"action":"route","outbound":outbound_tag})); }
+        }
+        let blocked = routing_domains(routing, "blockDomains");
+        if !blocked.is_empty() { rules.push(json!({"domain_suffix":blocked,"action":"reject"})); }
+        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { rules.push(json!({"rule_set":["geosite-category-ads-all"],"action":"reject"})); }
+    }
+    let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
+    let dns_ip = match dns_server { "google" => "8.8.8.8", "quad9" => "9.9.9.9", _ => "1.1.1.1" };
+    let mut dns_servers = vec![json!({"type":"local","tag":"bootstrap"})];
+    if dns_server == "system" { dns_servers.push(json!({"type":"local","tag":"remote"})); }
+    else { dns_servers.push(json!({"type":"https","tag":"remote","server":dns_ip,"detour":"proxy"})); }
+    let final_outbound = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
+    let rule_sets = if enabled && routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { vec![json!({"type":"remote","tag":"geosite-category-ads-all","format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"proxy"})] } else { Vec::<Value>::new() };
     Ok(json!({
         "log":{"level":"info","timestamp":true},
-        "dns":{
-            "servers":[
-                {"type":"local","tag":"bootstrap"},
-                {"type":"udp","tag":"remote","server":"1.1.1.1","detour":"proxy"}
-            ],
-            "final":"remote", "strategy":"ipv4_only"
-        },
+        "dns":{"servers":dns_servers,"final":"remote","strategy":routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4")},
         "inbounds":inbounds,
         "outbounds":[outbound,{"type":"direct","tag":"direct"}],
-        "route":{
-            "auto_detect_interface":true,
-            "default_domain_resolver":{"server":"bootstrap"},
-            "final":"proxy",
-            "rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"ip_is_private":true,"action":"route","outbound":"direct"}]
-        }
+        "route":{"auto_detect_interface":true,"default_domain_resolver":{"server":"bootstrap"},"rule_set":rule_sets,"final":final_outbound,"rules":rules}
     }))
 }
 
 
-fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
+fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Value, String> {
     let protocol = outbound.get("type").and_then(Value::as_str).ok_or("Отсутствует тип протокола")?;
     let server = outbound.get("server").and_then(Value::as_str).unwrap_or("");
     let server_port = outbound.get("server_port").and_then(Value::as_u64).unwrap_or(0);
@@ -291,11 +309,25 @@ fn create_xray_config(outbound: Value, port: u16) -> Result<Value, String> {
         "hysteria2" | "tuic" | "anytls" => return Err(format!("Протокол {protocol} не поддерживается Xray-core. Выберите sing-box.")),
         other => return Err(format!("Протокол {other} не поддерживается Xray-адаптером")),
     };
+    let enabled = routing.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let mut rules = Vec::<Value>::new();
+    if enabled && routing.get("bypassLan").and_then(Value::as_bool).unwrap_or(true) { rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"})); }
+    if enabled {
+        for (key, tag) in [("directDomains", "direct"), ("proxyDomains", "proxy"), ("blockDomains", "block")] {
+            let mut domains: Vec<String> = routing_domains(routing, key).into_iter().map(|d| format!("domain:{d}")).collect();
+            if !domains.is_empty() { rules.push(json!({"type":"field","domain":domains,"outboundTag":tag})); }
+        }
+        if routing.get("blockAds").and_then(Value::as_bool).unwrap_or(false) { rules.push(json!({"type":"field","domain":["geosite:category-ads-all"],"outboundTag":"block"})); }
+    }
+    let dns_server = routing.get("dnsServer").and_then(Value::as_str).unwrap_or("cloudflare");
+    let dns_address = match dns_server { "google" => "https://8.8.8.8/dns-query", "quad9" => "https://9.9.9.9/dns-query", "system" => "localhost", _ => "https://1.1.1.1/dns-query" };
+    let final_tag = match routing.get("mode").and_then(Value::as_str).unwrap_or("rule") { "direct" => "direct", _ => "proxy" };
     Ok(json!({
         "log":{"loglevel":"warning"},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
-        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"}],
-        "routing":{"domainStrategy":"AsIs","rules":[]}
+        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block","settings":{"response":{"type":"http"}}}],
+        "dns":{"servers":[dns_address,"localhost"],"queryStrategy":routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("UseIPv4")},
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"domainStrategy":"AsIs","final":final_tag}
     }))
 }
 
@@ -478,7 +510,7 @@ pub fn core_log(state: State<'_, CoreState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String) -> Result<CoreStatus, String> {
+pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value, mode: String, engine: String, routing: Value) -> Result<CoreStatus, String> {
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
     if engine != "xray" && engine != "sing-box" { return Err("Неизвестное ядро".into()); }
     if engine == "xray" && mode == "tun" { return Err("Xray в Wayline пока работает в режиме локального SOCKS-прокси. Для TUN выберите sing-box.".into()); }
@@ -489,7 +521,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
 
     let binary = binary_path(&engine, &app)?;
     let port = open_port()?;
-    let config = if engine == "xray" { create_xray_config(outbound, port)? } else { create_singbox_config(outbound, &mode, port)? };
+    let config = if engine == "xray" { create_xray_config(outbound, port, &routing)? } else { create_singbox_config(outbound, &mode, port, &routing)? };
     let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let config_path = dir.join(if engine == "xray" { "active-xray.json" } else { "active-sing-box.json" });
