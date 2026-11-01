@@ -13,6 +13,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.URL
+import java.net.InetSocketAddress
+import java.net.Socket
 import javax.net.ssl.HttpsURLConnection
 
 class MainActivity : TauriActivity() {
@@ -117,6 +119,16 @@ class MainActivity : TauriActivity() {
                 .put("engine", if (running || connecting) "sing-box" else JSONObject.NULL)
                 .put("error", prefs.getString(WaylineVpnService.KEY_ERROR, null) ?: JSONObject.NULL)
                 .toString()
+        }
+
+        @JavascriptInterface
+        fun ping(host: String, port: Int): Long {
+            if (host.isBlank() || port !in 1..65535) return -1L
+            val started = System.nanoTime()
+            return try {
+                Socket().use { it.connect(InetSocketAddress(host, port), 2000) }
+                (System.nanoTime() - started) / 1_000_000L
+            } catch (_: Throwable) { -1L }
         }
 
         @JavascriptInterface
