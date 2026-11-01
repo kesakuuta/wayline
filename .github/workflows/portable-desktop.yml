@@ -72,7 +72,7 @@ jobs:
             build-essential curl wget file libssl-dev \
             libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
-            libxdo-dev patchelf
+            libxdo-dev patchelf zip
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
