@@ -154,3 +154,10 @@ export async function pingServer(host: string, port: number): Promise<number|nul
   try { return await invoke<number>('core_ping', { host, port }); }
   catch { return null; }
 }
+
+export type PendingConnection = { outbound: Record<string, unknown>; mode: CoreMode; engine: CoreEngine };
+export async function takePendingConnection(): Promise<PendingConnection|null> {
+  if (!isTauri()) return null;
+  try { return await invoke<PendingConnection|null>('core_take_pending_connect'); }
+  catch { return null; }
+}
