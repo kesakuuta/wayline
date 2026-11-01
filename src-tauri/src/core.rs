@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -435,6 +435,22 @@ pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
     Ok(SubscriptionFetch { content, title })
 }
 
+
+#[tauri::command]
+pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
+    if host.trim().is_empty() || host.len() > 253 || host.chars().any(char::is_control) || port == 0 {
+        return Err("Некорректный адрес сервера".into());
+    }
+    let addresses = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?;
+    let started = Instant::now();
+    for address in addresses.take(8) {
+        if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok() {
+            return Ok(started.elapsed().as_millis() as u64);
+        }
+    }
+    Err("Сервер не ответил на TCP-проверку".into())
+}
+
 #[tauri::command]
 pub fn core_status(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
@@ -493,6 +509,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(&binary);
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
     if engine == "xray" {
         // Xray resolves geoip.dat/geosite.dat relative to its asset directory.
         // Packaged builds keep the data files beside the executable in resources.
