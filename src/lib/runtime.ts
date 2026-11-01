@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { RoutingSettings } from './types';
 
 export type CoreMode = 'tun' | 'proxy';
 export type CoreEngine = 'xray' | 'sing-box';
@@ -42,7 +43,8 @@ export async function status(): Promise<CoreStatus> {
 export async function connect(
   outbound: Record<string, unknown>,
   mode: CoreMode,
-  engine: CoreEngine
+  engine: CoreEngine,
+  routing?: RoutingSettings
 ): Promise<CoreStatus> {
   if (isAndroidNative()) {
     const android = window.WaylineAndroid;
@@ -63,27 +65,33 @@ export async function connect(
           listen: '127.0.0.1',
           listen_port: 2080
         }];
+    const domainList = (value?: string) => (value ?? '').split(/[\\n,;]+/).map(v => v.trim().replace(/^\\./, '')).filter(v => v && !/[\\s\\x00-\\x1f]/.test(v));
+    const dnsAddress = routing?.dnsServer === 'google' ? '8.8.8.8' : routing?.dnsServer === 'quad9' ? '9.9.9.9' : '1.1.1.1';
+    const dnsServers = routing?.dnsServer === 'system' ? [{ type: 'local', tag: 'dns-remote' }] : [{ type: 'https', tag: 'dns-remote', server: dnsAddress, detour: 'proxy' }];
+    const routeRules: Record<string, unknown>[] = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }];
+    if (routing?.enabled !== false && routing?.bypassLan !== false) routeRules.push({ ip_is_private: true, action: 'route', outbound: 'direct' });
+    if (routing?.enabled !== false) {
+      const direct = domainList(routing?.directDomains); if (direct.length) routeRules.push({ domain_suffix: direct, action: 'route', outbound: 'direct' });
+      const proxy = domainList(routing?.proxyDomains); if (proxy.length) routeRules.push({ domain_suffix: proxy, action: 'route', outbound: 'proxy' });
+      const blocked = domainList(routing?.blockDomains); if (blocked.length) routeRules.push({ domain_suffix: blocked, action: 'reject' });
+      if (routing?.blockAds) routeRules.push({ rule_set: ['geosite-category-ads-all'], action: 'reject' });
+    }
+    const routeFinal = routing?.mode === 'direct' ? 'direct' : 'proxy';
     const config = {
       log: { level: 'info', timestamp: true },
       dns: {
-        servers: [
-          { type: 'local', tag: 'bootstrap' },
-          { type: 'udp', tag: 'dns-remote', server: '1.1.1.1', detour: 'proxy' }
-        ],
+        servers: [{ type: 'local', tag: 'bootstrap' }, ...dnsServers],
         final: 'dns-remote',
-        strategy: 'prefer_ipv4'
+        strategy: routing?.dnsStrategy ?? 'prefer_ipv4'
       },
       inbounds,
       outbounds: [selected, { type: 'direct', tag: 'direct' }],
       route: {
         auto_detect_interface: true,
         default_domain_resolver: { server: 'bootstrap' },
-        rules: [
-          { action: 'sniff' },
-          { protocol: 'dns', action: 'hijack-dns' },
-          { ip_is_private: true, action: 'route', outbound: 'direct' }
-        ],
-        final: 'proxy'
+        rule_set: routing?.blockAds ? [{ type: 'remote', tag: 'geosite-category-ads-all', format: 'binary', url: 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs', download_detour: 'proxy' }] : [],
+        rules: routeRules,
+        final: routeFinal
       }
     };
     android.connect(JSON.stringify(config), mode);
@@ -104,7 +112,7 @@ export async function connect(
     return current;
   }
   requireDesktop();
-  return invoke<CoreStatus>('core_connect', { outbound, mode, engine });
+  return invoke<CoreStatus>('core_connect', { outbound, mode, engine, routing });
 }
 export async function disconnect(): Promise<CoreStatus> {
   if (isAndroidNative()) {
