@@ -159,7 +159,7 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
             throw IllegalStateException("Android VPN permission has not been granted")
         }
         closeTun()
-        val builder = service.Builder().setSession("Wayline VPN")
+        val builder = service.Builder().setSession("Wayline")
         val mtu = call(options, "getMtu") as? Number
         if (mtu != null && mtu.toInt() > 0) builder.setMtu(mtu.toInt())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
