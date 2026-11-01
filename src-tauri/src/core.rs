@@ -816,7 +816,8 @@ pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
 
 #[tauri::command]
 pub fn core_status(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
-    let managed = state.0.lock().map_err(|e| e.to_string())?;
+    let mut managed = state.0.lock().map_err(|e| e.to_string())?;
+    managed.refresh();
     if managed.child.is_none() {
         if let Ok(data_dir) = app.path().app_local_data_dir() {
             let stale_backup = data_dir.join("proxy-previous.json");
@@ -912,7 +913,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     managed.child = Some(child);
     managed.config = Some(config_path);
     managed.log = Some(log_path);
-    managed.mode = Some(mode);
+    managed.mode = Some(mode.clone());
     managed.port = Some(port);
     managed.started = Some(Instant::now());
     managed.verification = Some("checking".into());
