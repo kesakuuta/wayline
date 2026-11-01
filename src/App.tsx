@@ -3,7 +3,7 @@ import { Activity, ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronR
 import type { Appearance, AppearanceStyle, Mode, Server, Subscription, ThemeName, RoutingSettings } from './lib/types';
 import { defaultAppearance, loadAppearance, saveAppearance } from './lib/persist';
 import { importConfigs } from './lib/links';
-import { connect, disconnect, status, coreLog, fetchSubscription, readClipboard, listBackups, createBackup, restoreBackup, isTauri, isAndroidNative, type BackupInfo, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
+import { connect, disconnect, status, coreLog, pingServer, fetchSubscription, readClipboard, listBackups, createBackup, restoreBackup, isTauri, isAndroidNative, type BackupInfo, type CoreMode, type CoreEngine, type CoreStatus } from './lib/runtime';
 
 const initial:Subscription[]=[];
 const PROFILE_KEY = 'wayline.profiles.v2';
