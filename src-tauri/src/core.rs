@@ -227,9 +227,9 @@ if (-not (Test-Path $env:WAYLINE_PROXY_BACKUP)) {{
   }}
   $s | ConvertTo-Json | Set-Content -LiteralPath $env:WAYLINE_PROXY_BACKUP -Encoding UTF8
 }}
-Set-ItemProperty -Path $p -Name ProxyEnable -Type DWord -Value 1
-Set-ItemProperty -Path $p -Name ProxyServer -Type String -Value '{proxy_server}'
-Set-ItemProperty -Path $p -Name ProxyOverride -Type String -Value 'localhost;127.*;10.*;172.16.*;192.168.*;<local>'
+New-ItemProperty -Path $p -Name ProxyEnable -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path $p -Name ProxyServer -PropertyType String -Value '{proxy_server}' -Force | Out-Null
+New-ItemProperty -Path $p -Name ProxyOverride -PropertyType String -Value 'localhost;127.*;10.*;172.*;192.168.*;<local>' -Force | Out-Null
 Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WaylineWinInet {{ [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l); }}' -ErrorAction SilentlyContinue
 [WaylineWinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
 [WaylineWinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
