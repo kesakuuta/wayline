@@ -85,7 +85,7 @@ def main(platform: str) -> None:
         raise SystemExit("Usage: fetch-runtime-binaries.py windows|linux")
     DEST.mkdir(parents=True, exist_ok=True)
     windows = platform == "windows"
-    sing_release = request_json("https://api.github.com/repos/SagerNet/sing-box/releases/tags/v1.14.4")
+    sing_release = request_json("https://api.github.com/repos/SagerNet/sing-box/releases/tags/v1.14.0")
     xray_release = request_json("https://api.github.com/repos/XTLS/Xray-core/releases/latest")
     sing_predicate = (lambda n: n.startswith("sing-box") and "windows" in n and "amd64" in n and n.endswith(".zip")) if windows else (lambda n: n.startswith("sing-box") and "linux" in n and "amd64" in n and (n.endswith(".tar.gz") or n.endswith(".zip")) )
     xray_predicate = (lambda n: "xray" in n and "windows" in n and ("64" in n or "amd64" in n) and n.endswith(".zip")) if windows else (lambda n: "xray" in n and "linux" in n and ("64" in n or "amd64" in n) and (n.endswith(".zip") or n.endswith(".tar.gz")) )
