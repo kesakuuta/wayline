@@ -18,6 +18,7 @@ class WaylineVpnService : VpnService() {
     @Volatile private var engine: LibboxBridge? = null
     @Volatile private var startedAt = 0L
     @Volatile private var currentMode = MODE_TUN
+    @Volatile private var expectedStop = false
     private val worker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "Wayline-Libbox").apply { isDaemon = true }
     }
@@ -34,6 +35,7 @@ class WaylineVpnService : VpnService() {
                 val config = intent.getStringExtra(EXTRA_CONFIG)
                 val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_TUN
                 currentMode = mode
+                expectedStop = false
                 startForeground(NOTIFICATION_ID, buildNotification("Запуск sing-box…"))
                 saveStatus(running = false, connecting = true, error = null, mode = mode)
                 worker.execute {
@@ -55,6 +57,7 @@ class WaylineVpnService : VpnService() {
                         saveStatus(running = true, connecting = false, error = null, mode = mode)
                         updateNotification(if (mode == MODE_TUN) "VPN подключён" else "Локальный прокси запущен")
                     } catch (error: Throwable) {
+                        expectedStop = true
                         runCatching { bridge?.stop() }
                         if (engine === bridge) engine = null
                         startedAt = 0L
@@ -76,6 +79,7 @@ class WaylineVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        expectedStop = true
         val active = engine
         engine = null
         runCatching { active?.stop() }
@@ -86,6 +90,7 @@ class WaylineVpnService : VpnService() {
     }
 
     internal fun onCoreStopped() {
+        if (expectedStop) return
         val active = engine
         engine = null
         runCatching { active?.releaseAfterCoreStopped() }
@@ -96,6 +101,7 @@ class WaylineVpnService : VpnService() {
     }
 
     internal fun onCoreError(message: String) {
+        if (expectedStop) return
         val active = engine
         engine = null
         runCatching { active?.releaseAfterCoreStopped() }
@@ -152,6 +158,7 @@ class WaylineVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        expectedStop = true
         val active = engine
         engine = null
         runCatching { active?.stop() }
