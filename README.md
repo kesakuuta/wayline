@@ -66,7 +66,7 @@ See [PLATFORM_STATUS.md](PLATFORM_STATUS.md) for verified build status and known
 - Android: sing-box runs through the libbox Android binding and Android `VpnService`.
 - TUN requires OS-level permissions and a compatible network stack.
 
-A local proxy listens on loopback. It does not, by itself, redirect every application on the device. Use TUN when you need system-wide routing.
+Desktop Proxy mode configures the Windows user proxy or GNOME desktop proxy automatically and restores the previous values on disconnect. Xray publishes its SOCKS endpoint; sing-box publishes its mixed HTTP/SOCKS endpoint. Android Proxy mode uses VpnService and Android's per-VPN HTTP proxy on API 29+, while the TUN interface remains active underneath. Use TUN mode when you need protocol-independent system-wide routing.
 
 ## Download
 

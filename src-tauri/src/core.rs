@@ -112,6 +112,7 @@ impl Managed {
 pub fn stop_on_exit(app: &AppHandle) {
     if let Some(state) = app.try_state::<CoreState>() {
         if let Ok(mut managed) = state.0.lock() { managed.stop(); }
+        let _ = restore_system_proxy(app);
     }
 }
 
@@ -156,6 +157,77 @@ fn hide_console(command: &mut Command) {
 }
 #[cfg(not(windows))]
 fn hide_console(_command: &mut Command) {}
+
+fn proxy_backup_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("system-proxy-backup.json"))
+}
+fn proxy_command(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut command = Command::new(program); hide_console(&mut command);
+    command.args(args).output().map_err(|e| format!("{program}: {e}"))
+}
+#[cfg(windows)]
+fn notify_proxy_changed() {
+    #[link(name = "wininet")]
+    extern "system" { fn InternetSetOptionW(handle: *mut std::ffi::c_void, option: u32, buffer: *mut std::ffi::c_void, length: u32) -> i32; }
+    unsafe { let _ = InternetSetOptionW(std::ptr::null_mut(), 39, std::ptr::null_mut(), 0); let _ = InternetSetOptionW(std::ptr::null_mut(), 37, std::ptr::null_mut(), 0); }
+}
+#[cfg(windows)]
+fn set_system_proxy(app: &AppHandle, port: u16, engine: &str) -> Result<(), String> {
+    const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    let path = proxy_backup_path(app)?;
+    if !path.exists() {
+        let mut saved = serde_json::Map::new();
+        for name in ["ProxyEnable", "ProxyServer", "ProxyOverride"] {
+            let value = proxy_command("reg", &["query", KEY, "/v", name]).ok().filter(|o| o.status.success()).and_then(|o| String::from_utf8_lossy(&o.stdout).lines().find(|l| l.contains(name)).and_then(|l| l.split_whitespace().nth(2).map(str::to_string)));
+            saved.insert(name.into(), value.map(Value::String).unwrap_or(Value::Null));
+        }
+        write_private(&path, &serde_json::to_vec_pretty(&Value::Object(saved)).map_err(|e| e.to_string())?)?;
+    }
+    let proxy = if engine == "xray" { format!("socks=127.0.0.1:{port}") } else { format!("127.0.0.1:{port}") };
+    for (name, kind, value) in [("ProxyEnable", "REG_DWORD", "1"), ("ProxyServer", "REG_SZ", proxy.as_str()), ("ProxyOverride", "REG_SZ", "<local>;localhost;127.*")] {
+        let out = proxy_command("reg", &["add", KEY, "/v", name, "/t", kind, "/d", value, "/f"])?;
+        if !out.status.success() { return Err(format!("Не удалось включить системный прокси Windows: {}", String::from_utf8_lossy(&out.stderr))); }
+    }
+    notify_proxy_changed(); Ok(())
+}
+#[cfg(windows)]
+fn restore_system_proxy(app: &AppHandle) -> Result<(), String> {
+    const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    let path = proxy_backup_path(app)?; if !path.exists() { return Ok(()); }
+    let saved: Value = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    for (name, kind) in [("ProxyEnable", "REG_DWORD"), ("ProxyServer", "REG_SZ"), ("ProxyOverride", "REG_SZ")] {
+        if let Some(value) = saved.get(name).and_then(Value::as_str) { let _ = proxy_command("reg", &["add", KEY, "/v", name, "/t", kind, "/d", value, "/f"])?; }
+        else { let _ = proxy_command("reg", &["delete", KEY, "/v", name, "/f"]); }
+    }
+    let _ = fs::remove_file(path); notify_proxy_changed(); Ok(())
+}
+#[cfg(target_os = "linux")]
+fn set_system_proxy(app: &AppHandle, port: u16, engine: &str) -> Result<(), String> {
+    const SCHEMA: &str = "org.gnome.system.proxy";
+    let keys = ["mode","http.host","http.port","https.host","https.port","socks.host","socks.port"];
+    let path = proxy_backup_path(app)?;
+    if !path.exists() {
+        let mut saved = serde_json::Map::new();
+        for key in keys { let out = proxy_command("gsettings", &["get", SCHEMA, key])?; if !out.status.success() { return Err("Не удалось прочитать GNOME Proxy".into()); } saved.insert(key.into(), Value::String(String::from_utf8_lossy(&out.stdout).trim().into())); }
+        write_private(&path, &serde_json::to_vec_pretty(&Value::Object(saved)).map_err(|e| e.to_string())?)?;
+    }
+    let socks_only = engine == "xray";
+    let values = [("mode","'manual'".to_string()),("http.host",if socks_only{"''".into()}else{"'127.0.0.1'".into()}),("http.port",if socks_only{"0".into()}else{port.to_string()}),("https.host",if socks_only{"''".into()}else{"'127.0.0.1'".into()}),("https.port",if socks_only{"0".into()}else{port.to_string()}),("socks.host","'127.0.0.1'".into()),("socks.port",port.to_string())];
+    for (key,value) in values { let out=proxy_command("gsettings",&["set",SCHEMA,key,&value])?; if !out.status.success(){return Err(format!("Не удалось настроить GNOME Proxy ({key})"));} }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn restore_system_proxy(app: &AppHandle) -> Result<(), String> {
+    const SCHEMA: &str = "org.gnome.system.proxy"; let path=proxy_backup_path(app)?; if !path.exists(){return Ok(());}
+    let saved:Value=serde_json::from_slice(&fs::read(&path).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    for key in ["mode","http.host","http.port","https.host","https.port","socks.host","socks.port"] { if let Some(value)=saved.get(key).and_then(Value::as_str){let out=proxy_command("gsettings",&["set",SCHEMA,key,value])?;if !out.status.success(){return Err(format!("Не удалось восстановить GNOME Proxy ({key})"));}} }
+    let _=fs::remove_file(path); Ok(())
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn set_system_proxy(_app:&AppHandle,_port:u16,_engine:&str)->Result<(),String>{Err("Автоматический системный прокси поддерживается на Windows и GNOME Linux. На этой платформе используйте TUN.".into())}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn restore_system_proxy(_app:&AppHandle)->Result<(),String>{Ok(())}
+pub fn restore_system_proxy_on_start(app:&AppHandle)->Result<(),String>{restore_system_proxy(app)}
 
 #[tauri::command]
 pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
@@ -519,16 +591,19 @@ pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
 }
 
 #[tauri::command]
-pub fn core_status(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
+pub fn core_status(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
-    Ok(managed.status())
+    let status = managed.status();
+    if !status.running { let _ = restore_system_proxy(&app); }
+    Ok(status)
 }
 
 #[tauri::command]
-pub fn core_disconnect(state: State<'_, CoreState>) -> Result<CoreStatus, String> {
+pub fn core_disconnect(app: AppHandle, state: State<'_, CoreState>) -> Result<CoreStatus, String> {
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.stop();
     managed.last_error = None;
+    restore_system_proxy(&app)?;
     Ok(managed.status())
 }
 
@@ -593,6 +668,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.refresh();
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
+    restore_system_proxy(&app)?;
     managed.last_error = None;
 
     let binary = binary_path(&engine, &app)?;
@@ -673,6 +749,9 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     // Process can be running when server is temporarily unavailable. Do not call that 'connected'.
     managed.verification = Some(if result.is_ok() { "verified" } else { "unverified" }.into());
     if let Err(error) = result { managed.last_error = Some(format!("Ядро работает, но удалённое TCP-соединение не подтверждено: {error}")); }
+    if managed.mode.as_deref() == Some("proxy") {
+        if let Err(error) = set_system_proxy(&app, port, &engine) { managed.stop(); managed.last_error = Some(error.clone()); return Err(error); }
+    }
     Ok(managed.status())
 }
 

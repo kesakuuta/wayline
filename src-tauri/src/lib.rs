@@ -4,6 +4,7 @@ mod core;
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(core::CoreState::default())
+        .setup(|app| { let _ = core::restore_system_proxy_on_start(app.handle()); Ok(()) })
         .invoke_handler(tauri::generate_handler![
             core::core_connect,
             core::core_disconnect,
