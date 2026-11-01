@@ -88,6 +88,10 @@ Xray использует совместимые geoip.dat и geosite.dat из �
 
 Установите APK из [Releases](https://github.com/kesakuuta/wayline/releases), разрешите создание VPN-подключения и выберите сервер. Android использует sing-box TUN; Xray и локальный-only Proxy в Android UI не предлагаются.
 
+## Portable ZIP-сборки
+
+Windows и Linux ZIP-архивы собираются отдельным [GitHub Actions workflow](https://github.com/kesakuuta/wayline/actions/workflows/portable-desktop.yml). Артефакты доступны в соответствующем запуске Actions в течение 14 дней; это экспериментальные portable-пакеты, не заменяющие установщик.
+
 ## Быстрый запуск из исходников
 
 ### Desktop
@@ -154,7 +158,7 @@ Release-сборка:
 - [sing-box](https://github.com/SagerNet/sing-box) — сетевое ядро и TUN.
 - [Xray-core](https://github.com/XTLS/Xray-core) — Xray engine и GeoIP/GeoSite.
 - [Tauri](https://github.com/tauri-apps/tauri) — desktop/mobile shell.
-- [NekoBox for Android](https://github.com/MatsuriDayo/nekobox) — референс Android VPN lifecycle.
+- [NekoBox for Android](https://github.com/MatsuriDayo/NekoBoxForAndroid) — референс Android VPN lifecycle.
 - [Throne](https://github.com/throneproj/Throne) — референс desktop proxy/routing UX.
 
 Исходники upstream-проектов сохраняют собственные лицензии. Wayline не включает VPN-серверы и не предоставляет VPN-подписку — используйте собственные серверы и проверяйте доверие к их операторам.
