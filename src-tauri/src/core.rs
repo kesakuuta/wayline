@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn rejects_bad_servers() {
         assert!(create_singbox_config(json!({"type":"vless","server":"","server_port":443}), "tun", 2080, &json!({})).is_err());
-        assert!(create_singbox_config(json!({"type":"direct","server":"vpn.example.com","server_port":443}), "tun", 2080).is_err());
+        assert!(create_singbox_config(json!({"type":"direct","server":"vpn.example.com","server_port":443}), "tun", 2080, &json!({})).is_err());
     }
     #[test]
     fn local_mode_is_not_tun() {
