@@ -27,6 +27,7 @@ pub struct Managed {
     verification: Option<String>,
     engine: Option<String>,
     last_error: Option<String>,
+    proxy_backup: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +75,7 @@ impl Managed {
     }
 
     fn stop(&mut self) {
+        if let Some(path) = self.proxy_backup.take() { let _ = restore_windows_system_proxy(&path); }
         if let Some(mut child) = self.child.take() {
             #[cfg(unix)] {
                 // Give sing-box time to undo routes and firewall changes.
@@ -190,6 +192,77 @@ fn binary_path(engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
 
     Err(format!("Не найдено встроенное ядро {default_name}. Переустановите Wayline или проверьте комплектность сборки."))
 }
+
+
+#[cfg(windows)]
+fn run_hidden_powershell(script: &str, backup: &Path) -> Result<(), String> {
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
+        .env("WAYLINE_PROXY_BACKUP", backup);
+    use std::os::windows::process::CommandExt;
+    let output = command.creation_flags(0x08000000).output().map_err(|e| format!("Не удалось обновить системный прокси: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().if_empty("Не удалось изменить системный прокси"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn enable_windows_system_proxy(port: u16, backup: &Path) -> Result<(), String> {
+    let script = format!(r#"
+$ErrorActionPreference = 'Stop'
+$p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+if (-not (Test-Path $env:WAYLINE_PROXY_BACKUP)) {{
+  $v = Get-ItemProperty -Path $p
+  $s = [ordered]@{{
+    ProxyEnablePresent = ($v.PSObject.Properties.Name -contains 'ProxyEnable')
+    ProxyEnable = $v.ProxyEnable
+    ProxyServerPresent = ($v.PSObject.Properties.Name -contains 'ProxyServer')
+    ProxyServer = $v.ProxyServer
+    ProxyOverridePresent = ($v.PSObject.Properties.Name -contains 'ProxyOverride')
+    ProxyOverride = $v.ProxyOverride
+    AutoConfigURLPresent = ($v.PSObject.Properties.Name -contains 'AutoConfigURL')
+    AutoConfigURL = $v.AutoConfigURL
+  }}
+  $s | ConvertTo-Json | Set-Content -LiteralPath $env:WAYLINE_PROXY_BACKUP -Encoding UTF8
+}}
+Set-ItemProperty -Path $p -Name ProxyEnable -Type DWord -Value 1
+Set-ItemProperty -Path $p -Name ProxyServer -Type String -Value 'http=127.0.0.1:{port};https=127.0.0.1:{port};socks=127.0.0.1:{port}'
+Set-ItemProperty -Path $p -Name ProxyOverride -Type String -Value 'localhost;127.*;10.*;172.16.*;192.168.*;<local>'
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WaylineWinInet {{ [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l); }}' -ErrorAction SilentlyContinue
+[WaylineWinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+[WaylineWinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+"#);
+    run_hidden_powershell(&script, backup)
+}
+
+#[cfg(windows)]
+fn restore_windows_system_proxy(backup: &Path) -> Result<(), String> {
+    if !backup.is_file() { return Ok(()); }
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+if (Test-Path $env:WAYLINE_PROXY_BACKUP) {
+  $s = Get-Content -LiteralPath $env:WAYLINE_PROXY_BACKUP -Raw | ConvertFrom-Json
+  foreach ($n in @('ProxyEnable','ProxyServer','ProxyOverride','AutoConfigURL')) {
+    $present = [bool]$s.($n + 'Present')
+    if ($present) { Set-ItemProperty -Path $p -Name $n -Value $s.$n }
+    else { Remove-ItemProperty -Path $p -Name $n -ErrorAction SilentlyContinue }
+  }
+  Remove-Item -LiteralPath $env:WAYLINE_PROXY_BACKUP -Force
+}
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class WaylineWinInetRestore { [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l); }' -ErrorAction SilentlyContinue
+[WaylineWinInetRestore]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+[WaylineWinInetRestore]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+"#;
+    run_hidden_powershell(script, backup)
+}
+
+#[cfg(not(windows))]
+fn restore_windows_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
+
+trait IfEmpty { fn if_empty(self, fallback: &str) -> String; }
+impl IfEmpty for String { fn if_empty(self, fallback: &str) -> String { if self.trim().is_empty() { fallback.into() } else { self } } }
 
 fn open_port() -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("Локальный порт: {e}"))?;
@@ -604,6 +677,11 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     }
     // Process can be running when server is temporarily unavailable. Do not call that 'connected'.
     managed.verification = Some(if result.is_ok() { "verified" } else { "unverified" }.into());
+    if result.is_ok() && mode == "proxy" && cfg!(windows) {
+        let backup = dir.join("proxy-previous.json");
+        if let Err(error) = enable_windows_system_proxy(port, &backup) { managed.stop(); return Err(error); }
+        managed.proxy_backup = Some(backup);
+    }
     if let Err(error) = result { managed.last_error = Some(format!("Ядро работает, но удалённое TCP-соединение не подтверждено: {error}")); }
     Ok(managed.status())
 }
