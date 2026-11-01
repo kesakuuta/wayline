@@ -22,16 +22,21 @@ class MainActivity : TauriActivity() {
         WaylineVpnService.recoverStaleState(this)
     }
 
-    private var pendingConfig: String? = null
-    private var pendingMode: String = WaylineVpnService.MODE_TUN
+    @Volatile private var pendingConfig: String? = null
+    @Volatile private var pendingMode: String = WaylineVpnService.MODE_TUN
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val config = pendingConfig
+        val mode = pendingMode
+        pendingConfig = null
+        // A null pending config means the user pressed Disconnect while the system
+        // permission sheet was open. Never restart the VPN from that stale callback.
+        if (config.isNullOrBlank()) return@registerForActivityResult
         if (result.resultCode == RESULT_OK) {
-            startVpn(pendingConfig, pendingMode)
+            startVpn(config, mode)
         } else {
             setError("Разрешение Android на VPN не предоставлено")
         }
-        pendingConfig = null
     }
 
     override fun onWebViewCreate(webView: WebView) {
@@ -98,6 +103,7 @@ class MainActivity : TauriActivity() {
             pendingConfig = null
             getSharedPreferences(WaylineVpnService.PREFS, MODE_PRIVATE).edit()
                 .putBoolean(WaylineVpnService.KEY_CONNECTING, false)
+                .putString(WaylineVpnService.KEY_ERROR, null)
                 .apply()
             runOnUiThread {
                 startService(Intent(this@MainActivity, WaylineVpnService::class.java).setAction(WaylineVpnService.ACTION_STOP))
