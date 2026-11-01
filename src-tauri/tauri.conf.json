@@ -29,7 +29,7 @@
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Wayline VPN client with Xray and sing-box cores",
-    "longDescription": "Tauri desktop client with Xray local proxy and sing-box proxy/TUN support.",
+    "longDescription": "Cross-platform VPN client with sing-box TUN, Xray proxy and configurable routing.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
