@@ -39,6 +39,11 @@ jobs:
           echo "$XRAY_LINUX_SHA256  /tmp/xray.zip" | sha256sum -c -
           mkdir -p /tmp/xray && unzip -q /tmp/xray.zip -d /tmp/xray
           install -m 0755 "$(find /tmp/xray -type f -name xray | head -n 1)" src-tauri/binaries/xray
+          for asset in geoip.dat geosite.dat; do
+            asset_path="$(find /tmp/xray -type f -name "$asset" | head -n 1)"
+            test -n "$asset_path"
+            install -m 0644 "$asset_path" "src-tauri/binaries/$asset"
+          done
           curl -fL "https://github.com/SagerNet/sing-box/releases/download/v$SING_BOX_VERSION/sing-box-$SING_BOX_VERSION-linux-amd64.tar.gz" -o /tmp/sing-box.tar.gz
           echo "$SING_BOX_LINUX_SHA256  /tmp/sing-box.tar.gz" | sha256sum -c -
           mkdir -p /tmp/sing-box && tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box

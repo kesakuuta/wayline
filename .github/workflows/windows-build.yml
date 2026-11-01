@@ -40,6 +40,11 @@ jobs:
           $XrayExe = Get-ChildItem -Path "xray-extracted" -Filter "xray.exe" -File -Recurse | Select-Object -First 1
           if (-not $XrayExe) { throw "xray.exe was not found in the official Xray archive" }
           Copy-Item $XrayExe.FullName (Join-Path $BinDir "xray.exe") -Force
+          foreach ($Asset in @("geoip.dat", "geosite.dat")) {
+            $AssetFile = Get-ChildItem -Path "xray-extracted" -Filter $Asset -File -Recurse | Select-Object -First 1
+            if (-not $AssetFile) { throw "$Asset was not found in the official Xray archive" }
+            Copy-Item $AssetFile.FullName (Join-Path $BinDir $Asset) -Force
+          }
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/XTLS/Xray-core/$env:XRAY_VERSION/LICENSE" -OutFile (Join-Path $BinDir "LICENSE-Xray-MPL-2.0.txt")
 
           # Official sing-box Windows amd64 archive.
