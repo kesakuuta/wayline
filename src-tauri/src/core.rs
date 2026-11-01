@@ -115,6 +115,48 @@ pub fn stop_on_exit(app: &AppHandle) {
     }
 }
 
+
+#[cfg(windows)]
+fn request_windows_tun_elevation(app: &AppHandle, outbound: &Value, mode: &str, engine: &str) -> Result<(), String> {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr::null_mut};
+    #[link(name = "shell32")]
+    extern "system" {
+        fn IsUserAnAdmin() -> i32;
+        fn ShellExecuteW(hwnd: *mut std::ffi::c_void, operation: *const u16, file: *const u16,
+            parameters: *const u16, directory: *const u16, show: i32) -> isize;
+    }
+    if unsafe { IsUserAnAdmin() } != 0 { return Ok(()); }
+    let data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let pending = data_dir.join("pending-connect.json");
+    let payload = json!({"outbound":outbound,"mode":mode,"engine":engine});
+    fs::write(&pending, serde_json::to_vec(&payload).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let verb: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+    let file: Vec<u16> = executable.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe { ShellExecuteW(null_mut(), verb.as_ptr(), file.as_ptr(), null_mut(), null_mut(), 1) };
+    if result <= 32 {
+        let _ = fs::remove_file(&pending);
+        return Err("Windows не выдал права администратора. Повторите запуск TUN и подтвердите запрос UAC.".into());
+    }
+    app.exit(0);
+    Err("Запрашиваю права администратора для TUN. Wayline перезапустится и продолжит подключение.".into())
+}
+
+#[cfg(not(windows))]
+fn request_windows_tun_elevation(_app: &AppHandle, _outbound: &Value, _mode: &str, _engine: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+pub fn core_take_pending_connect(app: AppHandle) -> Result<Option<Value>, String> {
+    let path = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("pending-connect.json");
+    if !path.is_file() { return Ok(None); }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(&path);
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| format!("Повреждён запрос подключения после повышения прав: {e}"))
+}
+
 fn binary_path(engine: &str, app: &AppHandle) -> Result<PathBuf, String> {
     let default_name = match (engine, cfg!(windows)) {
         ("xray", true) => "xray.exe",
@@ -476,6 +518,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     if mode != "tun" && mode != "proxy" { return Err("Неизвестный режим подключения".into()); }
     if engine != "xray" && engine != "sing-box" { return Err("Неизвестное ядро".into()); }
     if engine == "xray" && mode == "tun" { return Err("Xray в Wayline пока работает в режиме локального SOCKS-прокси. Для TUN выберите sing-box.".into()); }
+    if mode == "tun" { request_windows_tun_elevation(&app, &outbound, &mode, &engine)?; }
     let mut managed = state.0.lock().map_err(|e| e.to_string())?;
     managed.refresh();
     if managed.child.is_some() { return Err("Сначала отключите текущий сервер".into()); }
@@ -508,6 +551,11 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     }
     let log = File::create(&log_path).map_err(|e| e.to_string())?;
     let errlog = log.try_clone().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    let mut command = if mode == "tun" && unsafe { libc::geteuid() } != 0 {
+        let mut elevated = Command::new("pkexec"); elevated.arg(&binary); elevated
+    } else { Command::new(&binary) };
+    #[cfg(not(target_os = "linux"))]
     let mut command = Command::new(&binary);
     #[cfg(windows)] { use std::os::windows::process::CommandExt; command.creation_flags(0x08000000); }
     if engine == "xray" {
