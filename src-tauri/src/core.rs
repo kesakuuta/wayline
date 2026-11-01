@@ -180,12 +180,12 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16) -> Result<Value
             "final":"remote", "strategy":"ipv4_only"
         },
         "inbounds":inbounds,
-        "outbounds":[outbound],
+        "outbounds":[outbound,{"type":"direct","tag":"direct"}],
         "route":{
             "auto_detect_interface":true,
             "default_domain_resolver":{"server":"bootstrap"},
             "final":"proxy",
-            "rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"}]
+            "rules":[{"action":"sniff"},{"protocol":"dns","action":"hijack-dns"},{"ip_is_private":true,"action":"route","outbound":"direct"}]
         }
     }))
 }
@@ -471,7 +471,7 @@ pub fn core_connect(app: AppHandle, state: State<'_, CoreState>, outbound: Value
     let (checked, xray_legacy_cli) = if engine == "xray" {
         match run_xray_config_check(&binary, &config_path) {
             Ok(value) => value,
-            Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Укажите путь к бинарнику в настройках.", binary.display())); }
+            Err(err) => { let _ = fs::remove_file(&config_path); return Err(format!("Не удалось запустить {engine} ({}): {err}. Проверьте целостность установки и наличие встроенного ядра.", binary.display())); }
         }
     } else {
         let output = Command::new(&binary).arg("check").arg("-c").arg(&config_path).output()

@@ -11,16 +11,16 @@ Open **Settings → Connection**:
 
 Xray's TUN mode is deliberately unavailable in this build. A running local SOCKS listener does not automatically route all operating-system traffic. Configure an application to use the shown local proxy, or select sing-box TUN where supported and tested.
 
-## Install core binaries
+## Core binaries
 
-Download official binaries for the operating system and architecture:
+Release builds bundle the official Xray-core and sing-box executables for the target platform. Wayline resolves them from the application resources automatically; no executable path needs to be entered in Settings.
+
+For a development build, place the matching official executables in `src-tauri/binaries/` or make them available in `PATH`:
 
 - Xray-core: https://github.com/XTLS/Xray-core/releases
 - sing-box: https://github.com/SagerNet/sing-box/releases
 
-Extract the executable (`xray.exe` / `xray` and `sing-box.exe` / `sing-box`). In Wayline, open **Settings → Connection** and enter the full executable path. You can enter only the command name if it is already available in `PATH`.
-
-Do not download binaries from unofficial mirrors. Production packaging should pin a release and verify its published checksums/signatures.
+Do not use unofficial binary mirrors. Release workflows download the official upstream archives.
 
 ## Run the development UI
 
