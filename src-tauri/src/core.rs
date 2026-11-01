@@ -362,6 +362,75 @@ fn restore_system_proxy(_backup: &Path) -> Result<(), String> { Ok(()) }
 trait IfEmpty { fn if_empty(self, fallback: &str) -> String; }
 impl IfEmpty for String { fn if_empty(self, fallback: &str) -> String { if self.trim().is_empty() { fallback.into() } else { self } } }
 
+
+#[derive(serde::Serialize)]
+pub struct BackupInfo {
+    pub id: String,
+    pub created_at: u128,
+    pub size: u64,
+}
+
+fn backup_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("backups");
+    fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать каталог резервных копий: {e}"))?;
+    Ok(dir)
+}
+
+fn valid_backup_id(id: &str) -> bool {
+    id.starts_with("backup-") && id.ends_with(".json")
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+}
+
+#[tauri::command]
+pub fn core_backup_directory(app: AppHandle) -> Result<String, String> {
+    Ok(backup_directory(&app)?.display().to_string())
+}
+
+#[tauri::command]
+pub fn core_backup_list(app: AppHandle) -> Result<Vec<BackupInfo>, String> {
+    let dir = backup_directory(&app)?;
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !valid_backup_id(&id) || !path.is_file() { continue; }
+        let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+        let created_at = id.trim_start_matches("backup-").trim_end_matches(".json").parse::<u128>().unwrap_or(0);
+        backups.push(BackupInfo { id, created_at, size: metadata.len() });
+    }
+    backups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(backups)
+}
+
+#[tauri::command]
+pub fn core_backup_create(app: AppHandle, data: Value) -> Result<BackupInfo, String> {
+    if !data.get("subscriptions").and_then(Value::as_array).is_some() {
+        return Err("Резервная копия не содержит список профилей".into());
+    }
+    let dir = backup_directory(&app)?;
+    let created_at = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_millis();
+    let id = format!("backup-{created_at}.json");
+    let path = dir.join(&id);
+    let bytes = serde_json::to_vec_pretty(&data).map_err(|e| e.to_string())?;
+    write_private(&path, &bytes)?;
+    Ok(BackupInfo { id, created_at, size: bytes.len() as u64 })
+}
+
+#[tauri::command]
+pub fn core_backup_restore(app: AppHandle, id: String) -> Result<Value, String> {
+    if !valid_backup_id(&id) { return Err("Некорректное имя резервной копии".into()); }
+    let path = backup_directory(&app)?.join(id);
+    let bytes = fs::read(path).map_err(|e| format!("Не удалось прочитать резервную копию: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("Резервная копия повреждена: {e}"))
+}
+
+#[tauri::command]
+pub fn core_backup_delete(app: AppHandle, id: String) -> Result<(), String> {
+    if !valid_backup_id(&id) { return Err("Некорректное имя резервной копии".into()); }
+    fs::remove_file(backup_directory(&app)?.join(id)).map_err(|e| format!("Не удалось удалить резервную копию: {e}"))
+}
+
 fn open_port() -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("Локальный порт: {e}"))?;
     listener.local_addr().map(|addr| addr.port()).map_err(|e| e.to_string())
