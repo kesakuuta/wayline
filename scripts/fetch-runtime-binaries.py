@@ -45,6 +45,12 @@ def pick_asset(release: dict, predicate, description: str) -> dict:
     raise RuntimeError(f"Could not find {description} in {release.get('html_url')}: {names}")
 
 
+def download_url(url: str, target: Path) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": HEADERS["User-Agent"]})
+    with urllib.request.urlopen(req, timeout=180) as response, target.open("wb") as output:
+        shutil.copyfileobj(response, output)
+
+
 def extract_members(archive: Path, wanted: set[str], temp: Path) -> dict[str, Path]:
     temp.mkdir(parents=True, exist_ok=True)
     found: dict[str, Path] = {}
@@ -81,8 +87,8 @@ def main(platform: str) -> None:
     windows = platform == "windows"
     sing_release = request_json("https://api.github.com/repos/SagerNet/sing-box/releases/latest")
     xray_release = request_json("https://api.github.com/repos/XTLS/Xray-core/releases/latest")
-    sing_predicate = (lambda n: "windows-amd64.zip" in n) if windows else (lambda n: "linux-amd64.tar.gz" in n)
-    xray_predicate = (lambda n: "xray-windows-64.zip" in n or "xray-windows-amd64.zip" in n) if windows else (lambda n: "xray-linux-64.zip" in n or "xray-linux-64.tar.gz" in n)
+    sing_predicate = (lambda n: n.startswith("sing-box") and "windows" in n and "amd64" in n and n.endswith(".zip")) if windows else (lambda n: n.startswith("sing-box") and "linux" in n and "amd64" in n and (n.endswith(".tar.gz") or n.endswith(".zip")) )
+    xray_predicate = (lambda n: "xray" in n and "windows" in n and ("64" in n or "amd64" in n) and n.endswith(".zip")) if windows else (lambda n: "xray" in n and "linux" in n and ("64" in n or "amd64" in n) and (n.endswith(".zip") or n.endswith(".tar.gz")) )
     sing_asset = pick_asset(sing_release, sing_predicate, f"sing-box {platform} x64 archive")
     xray_asset = pick_asset(xray_release, xray_predicate, f"Xray {platform} x64 archive")
 
@@ -92,16 +98,14 @@ def main(platform: str) -> None:
         download(sing_asset, sing_archive)
         download(xray_asset, xray_archive)
         exe_suffix = ".exe" if windows else ""
-        wanted = {"sing-box" + exe_suffix, "xray" + exe_suffix, "geoip.dat", "geosite.dat"}
+        wanted = {"sing-box" + exe_suffix, "xray" + exe_suffix}
         found = extract_members(sing_archive, wanted, tmp / "sing")
         found.update(extract_members(xray_archive, wanted, tmp / "xray"))
 
         for data_name in ("geoip.dat", "geosite.dat"):
-            if data_name not in found:
-                asset = pick_asset(xray_release, lambda n, target=data_name: n == target, data_name)
-                target = tmp / data_name
-                download(asset, target)
-                found[data_name] = target
+            target = tmp / data_name
+            download_url(f"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/{data_name}", target)
+            found[data_name] = target
 
         required = {"sing-box" + exe_suffix, "xray" + exe_suffix, "geoip.dat", "geosite.dat"}
         missing = required - found.keys()
