@@ -520,26 +520,11 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
             other => return Err(format!("Xray-адаптер пока не поддерживает транспорт {other}")),
         }
     }
-    let proxy = match protocol {
+    let mut proxy = match protocol {
         "vless" => {
-            let mut user = json!({
-                "id": outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),
-                "encryption": "none"
-            });
-            if let Some(flow) = outbound.get("flow").and_then(Value::as_str).filter(|v| !v.is_empty()) {
-                user["flow"] = json!(flow);
-            }
-            json!({
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [{
-                        "address": server,
-                        "port": server_port,
-                        "users": [user]
-                    }]
-                },
-                "streamSettings": stream
-            })
+            let mut user = json!({"id":outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),"encryption":"none"});
+            if let Some(flow) = outbound.get("flow").and_then(Value::as_str).filter(|v| !v.is_empty()) { user["flow"] = json!(flow); }
+            json!({"protocol":"vless","settings":{"vnext":[{"address":server,"port":server_port,"users":[user]}]},"streamSettings":stream})
         },
         "vmess" => json!({"protocol":"vmess","settings":{"vnext":[{"address":server,"port":server_port,"users":[{"id":outbound.get("uuid").and_then(Value::as_str).unwrap_or(""),"alterId":0,"security":outbound.get("security").and_then(Value::as_str).unwrap_or("auto")}]}]},"streamSettings":stream}),
         "trojan" => json!({"protocol":"trojan","settings":{"servers":[{"address":server,"port":server_port,"password":outbound.get("password").and_then(Value::as_str).unwrap_or("")}]},"streamSettings":stream}),
@@ -547,12 +532,6 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
         "hysteria2" | "tuic" | "anytls" => return Err(format!("Протокол {protocol} не поддерживается Xray-core. Выберите sing-box.")),
         other => return Err(format!("Протокол {other} не поддерживается Xray-адаптером")),
     };
-    Ok(json!({
-        "log":{"loglevel":"warning"},
-        "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
-        "outbounds":[proxy,{"protocol":"freedom","tag":"direct"}],
-        "routing":{"domainStrategy":"AsIs","rules":[]}
-    }))    let mut proxy = proxy;
     proxy["tag"] = json!("proxy");
     let mut rules: Vec<Value> = Vec::new();
     if route_enabled(routing, "rulesEnabled", true) {
@@ -575,12 +554,15 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     }
     let doh_url = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
     let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
+    let direct = json!({"protocol":"freedom","tag":"direct"});
+    let block = json!({"protocol":"blackhole","tag":"block"});
+    let outbounds = if final_tag == "direct" { vec![direct, proxy, block] } else { vec![proxy, direct, block] };
     Ok(json!({
         "log":{"loglevel":"warning"},
         "dns":{"servers":[doh_url],"queryStrategy":"UseIPv4"},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
-        "outbounds":if final_tag == "direct" { vec![json!({"protocol":"freedom","tag":"direct"}),proxy,json!({"protocol":"blackhole","tag":"block"})] } else { vec![proxy,json!({"protocol":"freedom","tag":"direct"}),json!({"protocol":"blackhole","tag":"block"})] },
-        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules,"balancers":[],"domainMatcher":"hybrid"}
+        "outbounds":outbounds,
+        "routing":{"domainStrategy":"IPIfNonMatch","rules":rules}
     }))
 }
 
