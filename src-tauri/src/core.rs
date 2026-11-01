@@ -1032,7 +1032,8 @@ mod tests {
             "blockDomains": "blocked.example",
             "dnsUrl": "https://dns.google/dns-query",
             "dnsRoute": "direct",
-            "geoCountry": "fi"
+            "geoCountry": "fi",
+            "directGeoSiteTags": "category-ru"
         });
         let cfg = create_singbox_config(
             json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}),
@@ -1042,7 +1043,7 @@ mod tests {
         assert_eq!(cfg["dns"]["servers"][1]["server"], "dns.google");
         assert_eq!(cfg["dns"]["servers"][1]["detour"], "direct");
         assert_eq!(cfg["route"]["rules"][2]["domain_suffix"][0], "blocked.example");
-        assert!(cfg["route"]["rule_set"].as_array().unwrap().iter().any(|set| set["tag"] == "geosite-fi"));
+        assert!(cfg["route"]["rule_set"].as_array().unwrap().iter().any(|set| set["tag"] == "geosite-category-ru"));
         assert!(cfg["route"]["rule_set"].as_array().unwrap().iter().any(|set| set["tag"] == "geoip-fi"));
     }
 
@@ -1055,6 +1056,7 @@ mod tests {
             "policy": "direct",
             "geoCountry": "fr",
             "directDomains": "direct.example",
+            "directGeoSiteTags": "category-ru",
             "dnsUrl": "https://cloudflare-dns.com/dns-query",
             "dnsRoute": "direct"
         });
@@ -1064,7 +1066,7 @@ mod tests {
         ).unwrap();
         assert_eq!(cfg["outbounds"][0]["tag"], "direct");
         assert_eq!(cfg["dns"]["servers"][0], "https+local://cloudflare-dns.com/dns-query");
-        assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["domain"][0] == "geosite:fr"));
+        assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["domain"][0] == "geosite:category-ru"));
         assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["ip"][0] == "geoip:fr"));
     }
 
