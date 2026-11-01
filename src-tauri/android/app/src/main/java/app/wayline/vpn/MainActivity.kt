@@ -31,11 +31,9 @@ class MainActivity : TauriActivity() {
     override fun onWebViewCreate(webView: WebView) {
         super.onWebViewCreate(webView)
         webView.addJavascriptInterface(WaylineJsBridge(), "WaylineAndroid")
-        // Disable browser-like long-press selection and copy menus in the Android shell.
-        webView.setOnLongClickListener { true }
-        webView.isHapticFeedbackEnabled = false
-        webView.setOnCreateContextMenuListener { _, _, _ -> }
-        webView.evaluateJavascript("(function(){document.addEventListener('contextmenu',function(e){e.preventDefault();},true);document.addEventListener('selectstart',function(e){if(!e.target.closest('input,textarea,select,[contenteditable=true]'))e.preventDefault();},true);})();", null)
+        // Keep the app chrome non-selectable, but allow users to select individual diagnostic log lines.
+        webView.isHapticFeedbackEnabled = true
+        webView.evaluateJavascript("(function(){document.addEventListener('contextmenu',function(e){if(!e.target.closest('.selectable-log'))e.preventDefault();},true);document.addEventListener('selectstart',function(e){if(!e.target.closest('input,textarea,select,[contenteditable=true],.selectable-log'))e.preventDefault();},true);})();", null)
     }
 
     private fun startVpn(config: String?, mode: String) {
