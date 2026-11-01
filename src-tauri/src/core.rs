@@ -661,10 +661,12 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
     let doh_base = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
     let doh_url = if routing.get("dnsRoute").and_then(Value::as_str) == Some("direct") { doh_base.replacen("https://", "https+local://", 1) } else { doh_base.to_string() };
     let dns_strategy = match routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4") { "prefer_ipv6" => "UseIPv6", "ipv4_and_ipv6" => "UseIP", _ => "UseIPv4" };
-    let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
+    if routing.get("policy").and_then(Value::as_str) == Some("direct") {
+        rules.push(json!({"type":"field","network":"tcp,udp","outboundTag":"direct"}));
+    }
     let direct = json!({"protocol":"freedom","tag":"direct"});
     let block = json!({"protocol":"blackhole","tag":"block"});
-    let outbounds = if final_tag == "direct" { vec![direct, proxy, block] } else { vec![proxy, direct, block] };
+    let outbounds = vec![proxy, direct, block];
     Ok(json!({
         "log":{"loglevel":"warning"},
         "dns":{"servers":[doh_url],"queryStrategy":dns_strategy},
@@ -1064,7 +1066,8 @@ mod tests {
             json!({"type":"vless","server":"vpn.example.com","server_port":443,"uuid":"abc"}),
             2080, &routing
         ).unwrap();
-        assert_eq!(cfg["outbounds"][0]["tag"], "direct");
+        assert_eq!(cfg["outbounds"][0]["tag"], "proxy");
+        assert_eq!(cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"], "direct");
         assert_eq!(cfg["dns"]["servers"][0], "https+local://cloudflare-dns.com/dns-query");
         assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["domain"][0] == "geosite:category-ru"));
         assert!(cfg["routing"]["rules"].as_array().unwrap().iter().any(|rule| rule["ip"][0] == "geoip:fr"));
