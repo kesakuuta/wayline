@@ -1030,7 +1030,7 @@ mod tests {
             "directDomains": "direct.example\nlocal.example",
             "proxyDomains": "proxy.example",
             "blockDomains": "blocked.example",
-            "dnsUrl": "https://dns.google/dns-query",
+            "dohUrl": "https://dns.google/dns-query",
             "dnsRoute": "direct",
             "geoCountry": "fi",
             "directGeoSiteTags": "category-ru"
@@ -1057,7 +1057,7 @@ mod tests {
             "geoCountry": "fr",
             "directDomains": "direct.example",
             "directGeoSiteTags": "category-ru",
-            "dnsUrl": "https://cloudflare-dns.com/dns-query",
+            "dohUrl": "https://cloudflare-dns.com/dns-query",
             "dnsRoute": "direct"
         });
         let cfg = create_xray_config(
