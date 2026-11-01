@@ -494,7 +494,7 @@ fn create_singbox_config(outbound: Value, mode: &str, port: u16, routing: &Value
     let mut rules = vec![json!({"action":"sniff"}), json!({"protocol":"dns","action":"hijack-dns"})];
     let mut rule_sets: Vec<Value> = Vec::new();
     if route_enabled(routing, "rulesEnabled", true) {
-        if route_enabled(routing, "blockAds", true) {
+        if route_enabled(routing, "blockAds", false) {
             rule_sets.push(json!({"type":"remote","tag":"geosite-category-ads-all","format":"binary","url":"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs","download_detour":"direct","update_interval":"24h"}));
             rules.push(json!({"rule_set":["geosite-category-ads-all"],"action":"reject"}));
         }
@@ -621,14 +621,16 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
             rules.push(json!({"type":"field","ip":["geoip:private"],"outboundTag":"direct"}));
         }
     }
-    let doh_url = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
+    let doh_base = routing.get("dohUrl").and_then(Value::as_str).filter(|v| v.starts_with("https://")).unwrap_or("https://cloudflare-dns.com/dns-query");
+    let doh_url = if routing.get("dnsRoute").and_then(Value::as_str) == Some("direct") { doh_base.replacen("https://", "https+local://", 1) } else { doh_base.to_string() };
+    let dns_strategy = match routing.get("dnsStrategy").and_then(Value::as_str).unwrap_or("prefer_ipv4") { "prefer_ipv6" => "UseIPv6", "ipv4_and_ipv6" => "UseIP", _ => "UseIPv4" };
     let final_tag = if routing.get("policy").and_then(Value::as_str) == Some("direct") { "direct" } else { "proxy" };
     let direct = json!({"protocol":"freedom","tag":"direct"});
     let block = json!({"protocol":"blackhole","tag":"block"});
     let outbounds = if final_tag == "direct" { vec![direct, proxy, block] } else { vec![proxy, direct, block] };
     Ok(json!({
         "log":{"loglevel":"warning"},
-        "dns":{"servers":[doh_url],"queryStrategy":"UseIPv4"},
+        "dns":{"servers":[doh_url],"queryStrategy":dns_strategy},
         "inbounds":[{"tag":"wayline-socks","listen":"127.0.0.1","port":port,"protocol":"socks","settings":{"auth":"noauth","udp":true,"ip":"127.0.0.1"}}],
         "outbounds":outbounds,
         "routing":{"domainStrategy":"IPIfNonMatch","rules":rules}
