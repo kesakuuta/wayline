@@ -159,7 +159,9 @@ fn hide_console(command: &mut Command) {
 fn hide_console(_command: &mut Command) {}
 
 fn proxy_backup_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_local_data_dir().map_err(|e| e.to_string())?.join("system-proxy-backup.json"))
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    Ok(root.join("system-proxy-backup.json"))
 }
 fn proxy_command(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
     let mut command = Command::new(program); hide_console(&mut command);
