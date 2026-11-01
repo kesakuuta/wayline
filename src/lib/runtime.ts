@@ -4,7 +4,7 @@ export type CoreMode = 'tun' | 'proxy';
 export type CoreEngine = 'xray' | 'sing-box';
 export type RouteSettings = { policy:'rules'|'direct'; rulesEnabled:boolean; bypassLan:boolean; blockAds:boolean; geoCountry:string; directDomains:string; proxyDomains:string; blockDomains:string; directGeoSiteTags:string; proxyGeoSiteTags:string; blockGeoSiteTags:string; dohUrl:string; dnsRoute:'proxy'|'direct'; dnsStrategy:'prefer_ipv4'|'prefer_ipv6'|'ipv4_and_ipv6' };
 export const defaultRouteSettings:RouteSettings = { policy:'rules', rulesEnabled:true, bypassLan:true, blockAds:false, geoCountry:'', directDomains:'', proxyDomains:'', blockDomains:'', directGeoSiteTags:'', proxyGeoSiteTags:'', blockGeoSiteTags:'', dohUrl:'https://cloudflare-dns.com/dns-query', dnsRoute:'proxy', dnsStrategy:'prefer_ipv4' };
-export function loadRouteSettings():RouteSettings { try { const saved=JSON.parse(localStorage.getItem('wayline.routing.v1')||'{}'); return {...defaultRouteSettings,...saved}; } catch { return defaultRouteSettings; } }
+export function loadRouteSettings():RouteSettings { try { const saved=JSON.parse(localStorage.getItem('wayline.routing.v1')||'{}'); const result={...defaultRouteSettings,...saved}; if(result.policy!=='direct') result.policy='rules'; return result as RouteSettings; } catch { return defaultRouteSettings; } }
 const domainList=(value:string)=>value.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x && /^[a-z0-9*._-]+$/.test(x)).slice(0,256);
 export type CoreStatus = {
   running: boolean;
