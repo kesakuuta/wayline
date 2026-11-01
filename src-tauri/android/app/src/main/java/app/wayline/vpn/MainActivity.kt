@@ -178,7 +178,9 @@ class MainActivity : TauriActivity() {
                 val disposition = connection.getHeaderField("Content-Disposition").orEmpty()
                 val filename = Regex("(?i)filename\\s*=\\s*\\\"?([^\\\";]+)").find(disposition)?.groupValues?.getOrNull(1)
                 val title = connection.getHeaderField("profile-title") ?: connection.getHeaderField("x-profile-title") ?: filename
-                JSONObject().put("content", content).put("title", title?.takeIf { it.isNotBlank() } ?: JSONObject.NULL).toString()
+                val userInfo = connection.getHeaderField("subscription-userinfo").orEmpty()
+                val expireAt = Regex("(?:^|;)\\s*expire=(\\d+)").find(userInfo)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: connection.getHeaderField("profile-expire")?.toLongOrNull()
+                JSONObject().put("content", content).put("title", title?.takeIf { it.isNotBlank() } ?: JSONObject.NULL).put("expireAt", expireAt ?: JSONObject.NULL).toString()
             } catch (error: Throwable) {
                 val message = error.message?.takeIf { it.startsWith("Подписка") || it.startsWith("Сервер") || it.startsWith("Локальные") }
                 JSONObject().put("error", message ?: "Не удалось загрузить подписку (${error.javaClass.simpleName})").toString()
