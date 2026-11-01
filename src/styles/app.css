@@ -192,3 +192,5 @@ input, textarea, select, [contenteditable="true"] {
 .app-shell[data-style="Expressive"] .primary-btn,.app-shell[data-style="Expressive"] .mini-primary,.app-shell[data-style="Expressive"] .connect-button{border-radius:28px}.app-shell[data-style="Minimal"] .surface-card,.app-shell[data-style="Minimal"] .stat-card{box-shadow:none;border-radius:12px}
 .app-shell.bg-custom:before{background:linear-gradient(180deg,#07111d9c,#07111d52 45%,#07111d9c);z-index:-1}.app-shell .empty-state{padding:28px 16px}
 @media(max-width:900px){.filter-panel{grid-template-columns:1fr}.log-drawer{width:96vw;height:88vh;padding:16px}}
+
+.flag{display:flex;align-items:center;justify-content:center;gap:3px}.flag-emoji{font-size:17px}.flag small{font-size:8px;font-weight:800;letter-spacing:.3px;color:var(--muted);text-transform:uppercase}
