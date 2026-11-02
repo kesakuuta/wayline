@@ -56,10 +56,13 @@ export async function connect(
       ? [{
           type: 'tun',
           tag: 'tun-in',
+          inet4_address: '172.19.0.1/30',
+          inet6_address: 'fdfe:dcba:9876::1/126',
           address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
           mtu: 1500,
           auto_route: true,
-          stack: 'system'
+          endpoint_independent_nat: true,
+          stack: 'mixed'
         }]
       : [{
           type: 'mixed',

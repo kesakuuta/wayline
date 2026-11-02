@@ -77,8 +77,11 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                 "useplatformautodetectinterfacecontrol" -> true
                 "autodetectinterfacecontrol" -> {
                     val fd = (args?.getOrNull(0) as? Number)?.toInt()
-                        ?: throw IllegalStateException("Libbox не передал TUN socket fd")
-                    if (!service.protect(fd)) throw IllegalStateException("Не удалось исключить сокет sing-box из VPN")
+                    if (fd != null && fd >= 0) {
+                        if (!service.protect(fd)) {
+                            Log.w("WaylineLibbox", "Не удалось защитить сокет $fd")
+                        }
+                    }
                     null
                 }
                 "opentun" -> { val fd = openTun(args?.getOrNull(0) ?: error("Libbox не передал TunOptions")); if (method.returnType == java.lang.Long.TYPE || method.returnType == java.lang.Long::class.java) fd.toLong() else fd }
@@ -528,8 +531,8 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
     fun stop() {
         stopRequested = true
         commandServer?.let { server ->
-            runCatching { server.javaClass.methods.first { it.name.equals("closeService", true) && it.parameterTypes.isEmpty() }.invoke(server) }
-            runCatching { server.javaClass.methods.first { it.name.equals("close", true) && it.parameterTypes.isEmpty() }.invoke(server) }
+            runCatching { server.javaClass.methods.firstOrNull { it.name.equals("closeService", true) && it.parameterTypes.isEmpty() }?.invoke(server) }
+            runCatching { server.javaClass.methods.firstOrNull { it.name.equals("close", true) && it.parameterTypes.isEmpty() }?.invoke(server) }
         }
         commandServer = null
         closeDefaultInterfaceMonitor()

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { importConfigs, parseShareLink } from '../src/lib/links';
+import { extractCountryCode } from '../src/components/CountryFlag';
 
 test('VLESS REALITY with flow and SNI', () => {
   const s = parseShareLink('vless://12345678-1234-1234-1234-123456789abc@edge.example.com:443?security=reality&pbk=abc&sid=12ab&sni=www.example.com&flow=xtls-rprx-vision#EU');
@@ -42,4 +43,14 @@ test('Country flags are inferred from the server alias', () => {
   const fi = parseShareLink('vless://12345678-1234-1234-1234-123456789abc@edge.example.com:443#Helsinki%20FI');
   assert.equal(de.flag, '🇩🇪');
   assert.equal(fi.flag, '🇫🇮');
+});
+
+test('extractCountryCode handles emojis, codes, and server names', () => {
+  assert.equal(extractCountryCode('🇷🇺'), 'RU');
+  assert.equal(extractCountryCode('EE'), 'EE');
+  assert.equal(extractCountryCode('RU Россия #2'), 'RU');
+  assert.equal(extractCountryCode('EE Эстония #1 GRPC'), 'EE');
+  assert.equal(extractCountryCode('FR Франция #2'), 'FR');
+  assert.equal(extractCountryCode('LV Латвия #1'), 'LV');
+  assert.equal(extractCountryCode('Helsinki FI'), 'FI');
 });
