@@ -1,3 +1,19 @@
+
+/* Native OS Window & Touch shell hardening */
+*, *::before, *::after {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  user-drag: none;
+  -webkit-touch-callout: none;
+}
+input, textarea, select, .core-log, code {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+button, a, select {
+  -webkit-tap-highlight-color: transparent;
+}
 :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden}.app-shell{height:100dvh;min-height:650px;position:relative;display:flex;flex-direction:column;overflow:hidden;background-color:var(--bg);background-size:cover;background-position:center;isolation:isolate}.app-shell:before{content:"";position:absolute;inset:0;background:rgba(5,12,21,calc(var(--overlay)*.14));z-index:-1;pointer-events:none}.ambient{position:absolute;inset:0;z-index:-2;opacity:.9;pointer-events:none}.bg-waves .ambient{background:radial-gradient(ellipse at 82% 48%,color-mix(in srgb,var(--glow) 24%,transparent),transparent 35%),radial-gradient(ellipse at 10% 4%,color-mix(in srgb,var(--primary) 12%,transparent),transparent 40%),linear-gradient(155deg,transparent 20%,color-mix(in srgb,var(--surface) 45%,transparent) 20.2%,transparent 48%),var(--bg)}.bg-gradient .ambient{background:radial-gradient(ellipse at 78% 35%,color-mix(in srgb,var(--primary) 27%,transparent),transparent 48%),linear-gradient(135deg,var(--bg),var(--surface),var(--bg))}.bg-solid .ambient{background:var(--bg)}.bg-custom .ambient{background:transparent}
 .topbar{height:64px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 30px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);background:color-mix(in srgb,var(--bg) 58%,transparent);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));z-index:4}.brand,.top-actions,.brand-mark,.demo-pill,.protection-chip,.mode-chip,.left-footer span,.left-footer button,.diagnostics-btn,.stat-label{display:flex;align-items:center}.brand{gap:10px;font:800 calc(13px * var(--font-scale,1)) Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:2px}.brand-mark{width:30px;height:30px;border-radius:10px;background:var(--primary);color:var(--bg);justify-content:center}.build-tag,.soon,.stage-label{font-size:calc(9px * var(--font-scale,1));font-weight:700;letter-spacing:1px;padding:4px 7px;border-radius:5px;background:color-mix(in srgb,var(--primary) 15%,transparent);color:var(--primary)}.top-actions{gap:12px}.demo-pill,.protection-chip,.mode-chip{font-size:calc(11px * var(--font-scale,1));color:var(--muted);gap:8px;border:1px solid var(--line);border-radius:30px;padding:8px 12px;background:color-mix(in srgb,var(--surface) 76%,transparent)}.pulse-dot,.status-dot,.state-indicator,.snackbar-dot{width:7px;height:7px;border-radius:50%;background:#e6b56c;box-shadow:0 0 0 4px #e6b56c20}.icon-btn{width:34px;height:34px;border:0;border-radius:50%;display:grid;place-items:center;background:transparent;color:var(--muted);cursor:pointer;transition:.2s}.icon-btn:hover{background:var(--surface-2);color:var(--ink)}.icon-btn.small{width:28px;height:28px}
 .workspace{position:relative;z-index:1;display:grid;flex:1;min-height:0;padding:16px 20px 10px;gap:0}.left-pane,.right-pane{min-width:0;min-height:0;display:flex;flex-direction:column}.left-pane{padding-right:16px}.right-pane{padding:0 20px 0 28px}.splitter{cursor:col-resize;display:flex;align-items:stretch;justify-content:center;position:relative}.splitter:after{content:"";width:1px;background:color-mix(in srgb,var(--line) 55%,transparent);transition:.2s}.splitter:hover:after{width:3px;background:var(--primary)}.splitter span{position:absolute;width:5px;height:42px;top:45%;border-radius:8px;background:var(--line);opacity:0;transition:.2s}.splitter:hover span{opacity:1}
