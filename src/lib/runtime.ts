@@ -24,7 +24,7 @@ declare global {
       status(): string;
       readClipboard(): string;
       fetchSubscription(url: string): string;
-      ping(host: string, port: number): number;
+      ping(host: string, port: number, mode?: string): number;
       coreLog(): string;
     };
   }
@@ -194,14 +194,14 @@ export async function coreLog(): Promise<string> {
 }
 export { isTauri, isAndroidNative };
 
-export async function pingServer(host: string, port: number): Promise<number|null> {
+export async function pingServer(host: string, port: number, mode: 'tcp'|'icmp'|'proxy_get'|'proxy_head' = 'tcp'): Promise<number|null> {
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null;
   if (isAndroidNative()) {
-    const value = window.WaylineAndroid?.ping(host, port);
+    const value = window.WaylineAndroid?.ping(host, port, mode);
     return typeof value === 'number' && value >= 0 ? value : null;
   }
   requireDesktop();
-  try { return await invoke<number>('core_ping', { host, port }); }
+  try { return await invoke<number>('core_ping', { host, port, mode }); }
   catch { return null; }
 }
 

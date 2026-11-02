@@ -954,18 +954,120 @@ pub fn fetch_subscription(url: String) -> Result<SubscriptionFetch, String> {
 
 
 #[tauri::command]
-pub fn core_ping(host: String, port: u16) -> Result<u64, String> {
+pub fn core_ping(
+    state: State<'_, CoreState>,
+    host: String,
+    port: u16,
+    mode: Option<String>,
+) -> Result<u64, String> {
     if host.trim().is_empty() || host.len() > 253 || host.chars().any(char::is_control) || port == 0 {
         return Err("Некорректный адрес сервера".into());
     }
-    let addresses = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?;
-    let started = Instant::now();
-    for address in addresses.take(8) {
-        if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok() {
-            return Ok(started.elapsed().as_millis() as u64);
+
+    let ping_mode = mode.as_deref().unwrap_or("tcp").to_lowercase();
+    match ping_mode.as_str() {
+        "icmp" => {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let started = Instant::now();
+                let mut cmd = Command::new("ping.exe");
+                cmd.args(["-n", "1", "-w", "2000", &host])
+                    .creation_flags(0x08000000);
+                let output = cmd.output().map_err(|e| format!("ICMP error: {e}"))?;
+                if !output.status.success() {
+                    return Err("Узел не ответил на ICMP (ping)".into());
+                }
+                let text = String::from_utf8_lossy(&output.stdout);
+                if text.contains("time<1ms") || text.contains("время<1мс") {
+                    return Ok(1);
+                }
+                for line in text.lines() {
+                    let lower = line.to_lowercase();
+                    if let Some(pos) = lower.find("time=") {
+                        let rem = &lower[pos + 5..];
+                        if let Some(end) = rem.find("ms") {
+                            if let Ok(ms) = rem[..end].trim().parse::<u64>() {
+                                return Ok(ms);
+                            }
+                        }
+                    } else if let Some(pos) = lower.find("время=") {
+                        let rem = &lower[pos + 12..];
+                        let digits: String = rem.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        if let Ok(ms) = digits.parse::<u64>() {
+                            return Ok(ms);
+                        }
+                    }
+                }
+                Ok(started.elapsed().as_millis() as u64)
+            }
+            #[cfg(not(windows))]
+            {
+                let started = Instant::now();
+                let output = Command::new("ping")
+                    .args(["-c", "1", "-W", "2", &host])
+                    .output()
+                    .map_err(|e| format!("ICMP error: {e}"))?;
+                if !output.status.success() {
+                    return Err("Узел не ответил на ICMP (ping)".into());
+                }
+                Ok(started.elapsed().as_millis() as u64)
+            }
+        }
+        "proxy_head" | "proxy_get" => {
+            let managed = state.0.lock().map_err(|e| e.to_string())?;
+            let is_head = ping_mode == "proxy_head";
+            let local_proxy = managed.child.as_ref().and_then(|_| managed.port);
+            drop(managed);
+
+            let started = Instant::now();
+            let mut client_builder = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(3000));
+
+            if let Some(proxy_port) = local_proxy {
+                if let Ok(proxy) = reqwest::Proxy::http(format!("http://127.0.0.1:{proxy_port}")) {
+                    client_builder = client_builder.proxy(proxy);
+                }
+            }
+
+            let client = client_builder.build().map_err(|e| e.to_string())?;
+            let url = if local_proxy.is_some() {
+                "http://cp.cloudflare.com/generate_204".to_string()
+            } else {
+                format!("http://{}:{}/", host, port)
+            };
+
+            let req = if is_head {
+                client.head(&url)
+            } else {
+                client.get(&url)
+            };
+
+            match req.send() {
+                Ok(_) => Ok(started.elapsed().as_millis() as u64),
+                Err(_) => {
+                    let addresses = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?;
+                    let started_tcp = Instant::now();
+                    for address in addresses.take(8) {
+                        if TcpStream::connect_timeout(&address, Duration::from_millis(2500)).is_ok() {
+                            return Ok(started_tcp.elapsed().as_millis() as u64);
+                        }
+                    }
+                    Err("Сервер не ответил на HTTP/Proxy проверку".into())
+                }
+            }
+        }
+        _ => {
+            let addresses = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("DNS: {e}"))?;
+            let started = Instant::now();
+            for address in addresses.take(8) {
+                if TcpStream::connect_timeout(&address, Duration::from_millis(2500)).is_ok() {
+                    return Ok(started.elapsed().as_millis() as u64);
+                }
+            }
+            Err("Сервер не ответил на TCP-проверку".into())
         }
     }
-    Err("Сервер не ответил на TCP-проверку".into())
 }
 
 #[tauri::command]

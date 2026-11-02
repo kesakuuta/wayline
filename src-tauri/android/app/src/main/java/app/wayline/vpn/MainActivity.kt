@@ -132,11 +132,45 @@ class MainActivity : TauriActivity() {
 
         @JavascriptInterface
         fun ping(host: String, port: Int): Long {
+            return ping(host, port, "tcp")
+        }
+
+        @JavascriptInterface
+        fun ping(host: String, port: Int, mode: String?): Long {
             if (host.isBlank() || port !in 1..65535) return -1L
+            val pingMode = mode?.lowercase() ?: "tcp"
             val started = System.nanoTime()
             return try {
-                Socket().use { it.connect(InetSocketAddress(host, port), 2000) }
-                (System.nanoTime() - started) / 1_000_000L
+                when (pingMode) {
+                    "icmp" -> {
+                        val address = java.net.InetAddress.getByName(host)
+                        if (address.isReachable(2500)) {
+                            (System.nanoTime() - started) / 1_000_000L
+                        } else {
+                            -1L
+                        }
+                    }
+                    "proxy_head", "proxy_get" -> {
+                        val testUrl = java.net.URL("http://cp.cloudflare.com/generate_204")
+                        val isHead = pingMode == "proxy_head"
+                        val conn = testUrl.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 3000
+                        conn.readTimeout = 3000
+                        conn.requestMethod = if (isHead) "HEAD" else "GET"
+                        conn.instanceFollowRedirects = false
+                        val code = conn.responseCode
+                        conn.disconnect()
+                        if (code in 200..399) {
+                            (System.nanoTime() - started) / 1_000_000L
+                        } else {
+                            -1L
+                        }
+                    }
+                    else -> {
+                        java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, port), 2000) }
+                        (System.nanoTime() - started) / 1_000_000L
+                    }
+                }
             } catch (_: Throwable) { -1L }
         }
 
