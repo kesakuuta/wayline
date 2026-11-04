@@ -26,6 +26,40 @@ class WaylineVpnService : VpnService() {
         Thread(runnable, "Wayline-VPN-Stop").apply { isDaemon = true }
     }
 
+    private fun sanitizeConfig(raw: String): String {
+        return try {
+            val root = org.json.JSONObject(raw)
+            val inbounds = root.optJSONArray("inbounds")
+            if (inbounds != null) {
+                for (i in 0 until inbounds.length()) {
+                    val inbound = inbounds.optJSONObject(i) ?: continue
+                    if (inbound.optString("type") == "tun") {
+                        val v4 = inbound.optString("inet4_address").takeIf { it.isNotBlank() }
+                        val v6 = inbound.optString("inet6_address").takeIf { it.isNotBlank() }
+                        inbound.remove("inet4_address")
+                        inbound.remove("inet6_address")
+                        inbound.remove("inet4_route_address")
+                        inbound.remove("inet6_route_address")
+                        inbound.remove("inet4_route_exclude_address")
+                        inbound.remove("inet6_route_exclude_address")
+
+                        if (!inbound.has("address")) {
+                            val addrs = org.json.JSONArray()
+                            if (v4 != null) addrs.put(v4) else addrs.put("172.19.0.1/30")
+                            if (v6 != null) addrs.put(v6) else addrs.put("fdfe:dcba:9876::1/126")
+                            inbound.put("address", addrs)
+                        }
+                        if (!inbound.has("auto_route")) inbound.put("auto_route", true)
+                        if (!inbound.has("strict_route")) inbound.put("strict_route", true)
+                    }
+                }
+            }
+            root.toString()
+        } catch (_: Throwable) {
+            raw
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -55,7 +89,7 @@ class WaylineVpnService : VpnService() {
                         val activeBridge = LibboxBridge(this)
                         bridge = activeBridge
                         engine = activeBridge
-                        activeBridge.start(config)
+                        activeBridge.start(sanitizeConfig(config))
                         if (expectedStop) throw CancellationException("Отключение запрошено во время запуска")
                         val storedError = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ERROR, null)
                         if (engine !== activeBridge || !storedError.isNullOrBlank()) {

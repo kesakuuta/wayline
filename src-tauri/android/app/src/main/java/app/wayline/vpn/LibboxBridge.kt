@@ -177,10 +177,14 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
         if (mtu != null && mtu.toInt() > 0) builder.setMtu(mtu.toInt())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
+        var totalAddressCount = addAddressList(builder, options, "getAddress")
         val ipv4AddressCount = addAddressList(builder, options, "getInet4Address")
         val ipv6AddressCount = addAddressList(builder, options, "getInet6Address")
-        if (ipv4AddressCount + ipv6AddressCount == 0) {
-            throw IllegalStateException("sing-box не передал адреса для Android VPN-интерфейса")
+        totalAddressCount += (ipv4AddressCount + ipv6AddressCount)
+        if (totalAddressCount == 0) {
+            builder.addAddress("172.19.0.1", 30)
+            builder.addAddress("fdfe:dcba:9876::1", 126)
+            totalAddressCount = 2
         }
 
         val autoRoute = call(options, "getAutoRoute") as? Boolean ?: true
@@ -190,16 +194,21 @@ internal class LibboxBridge(private val service: WaylineVpnService) {
                     builder.addDnsServer(address)
                 }
             }
-            val ipv4RouteCount: Int
-            val ipv6RouteCount: Int
+            var ipv4RouteCount = addRouteList(builder, options, "getRouteAddress")
+            var ipv6RouteCount = 0
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ipv4RouteCount = addRouteList(builder, options, "getInet4RouteAddress")
-                ipv6RouteCount = addRouteList(builder, options, "getInet6RouteAddress")
+                if (ipv4RouteCount == 0) {
+                    ipv4RouteCount = addRouteList(builder, options, "getInet4RouteAddress")
+                    ipv6RouteCount = addRouteList(builder, options, "getInet6RouteAddress")
+                }
+                addExcludeRouteList(builder, options, "getRouteExcludeAddress")
                 addExcludeRouteList(builder, options, "getInet4RouteExcludeAddress")
                 addExcludeRouteList(builder, options, "getInet6RouteExcludeAddress")
             } else {
-                ipv4RouteCount = addRouteList(builder, options, "getInet4RouteRange")
-                ipv6RouteCount = addRouteList(builder, options, "getInet6RouteRange")
+                if (ipv4RouteCount == 0) {
+                    ipv4RouteCount = addRouteList(builder, options, "getInet4RouteRange")
+                    ipv6RouteCount = addRouteList(builder, options, "getInet6RouteRange")
+                }
             }
             if (ipv4AddressCount > 0 && ipv4RouteCount == 0) builder.addRoute("0.0.0.0", 0)
             if (ipv6AddressCount > 0 && ipv6RouteCount == 0) builder.addRoute("::", 0)
