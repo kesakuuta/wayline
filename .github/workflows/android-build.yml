@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   android:
-    name: Build Android APK (Native Kotlin / Jetpack Compose)
+    name: Build Android APK (arm64)
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -28,9 +28,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      - name: Install Android SDK
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android SDK and NDK
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
@@ -41,19 +50,29 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
 
-      - name: Build Android APK with Gradle
+      - name: Install frontend dependencies
+        run: npm install --no-audit
+
+      - name: Check frontend
+        run: npm run build
+
+      - name: Prepare a fresh Tauri Android project
         run: |
-          cd android
-          gradle assembleRelease --stacktrace
+          rm -rf src-tauri/gen/android
+          cargo tauri android init
+          bash scripts/prepare-android.sh
+
+      - name: Build Android APK
+        run: cargo tauri android build --apk --target aarch64
 
       - name: Sign APK for testing
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
           test -n "$APK"
           BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           mkdir -p "$HOME/.android" signed-apk

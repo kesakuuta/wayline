@@ -4,10 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'desktop/**'
       - 'src/**'
       - 'src-tauri/**'
       - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
       - '.github/workflows/portable-desktop.yml'
   workflow_dispatch:
 
@@ -20,28 +22,35 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows x64 portable ZIP (Pure Native Rust)
+    name: Windows x64 portable ZIP
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
       - name: Download sing-box, Xray and GeoIP/GeoSite
         run: python scripts/fetch-runtime-binaries.py windows
-      - name: Build native desktop executable
-        run: cargo build --release --manifest-path desktop/Cargo.toml
+      - name: Build desktop executable
+        run: cargo tauri build --no-bundle
       - name: Assemble portable ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $exe = "desktop/target/release/wayline.exe"
+          $exe = "src-tauri/target/release/wayline-vpn.exe"
           if (!(Test-Path $exe)) { throw "Desktop executable not found: $exe" }
           $portable = "portable-windows"
-          New-Item -ItemType Directory -Force "$portable/binaries" | Out-Null
+          New-Item -ItemType Directory -Force "$portable/resources/binaries" | Out-Null
           Copy-Item $exe "$portable/Wayline.exe"
-          Copy-Item "src-tauri/binaries/*" "$portable/binaries/" -Force
+          Copy-Item "src-tauri/binaries/*" "$portable/resources/binaries/" -Force
           Copy-Item README.md, LICENSE $portable/
           Compress-Archive -Path "$portable/*" -DestinationPath "Wayline-Windows-Portable.zip" -Force
       - uses: actions/upload-artifact@v4
@@ -52,32 +61,41 @@ jobs:
           retention-days: 14
 
   linux:
-    name: Linux x64 portable ZIP (Pure Native Rust)
+    name: Linux x64 AppImage in ZIP
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install system dependencies
+      - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl wget file libssl-dev zip
+          sudo apt-get install -y \
+            build-essential curl wget file libssl-dev \
+            libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libxdo-dev patchelf zip libfuse2t64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version 2.12.4 --locked
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
       - name: Download sing-box, Xray and GeoIP/GeoSite
         run: python3 scripts/fetch-runtime-binaries.py linux
-      - name: Build native Linux executable
-        run: cargo build --release --manifest-path desktop/Cargo.toml
+      - name: Build AppImage
+        run: cargo tauri build --bundles appimage
       - name: Assemble portable ZIP
         shell: bash
         run: |
           set -euo pipefail
-          BIN="desktop/target/release/wayline"
-          test -f "$BIN"
-          mkdir -p portable-linux/binaries
-          cp "$BIN" portable-linux/Wayline
-          chmod +x portable-linux/Wayline
-          cp src-tauri/binaries/* portable-linux/binaries/ || true
+          APPIMAGE="$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' | head -n 1)"
+          test -n "$APPIMAGE"
+          mkdir -p portable-linux
+          cp "$APPIMAGE" portable-linux/Wayline.AppImage
           cp README.md LICENSE portable-linux/
           (cd portable-linux && zip -9 -r ../Wayline-Linux-Portable.zip .)
       - uses: actions/upload-artifact@v4

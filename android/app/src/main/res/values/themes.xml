@@ -1,7 +1,0 @@
-<resources>
-    <style name="Theme.Wayline" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0B0C10</item>
-        <item name="android:navigationBarColor">#0B0C10</item>
-        <item name="android:windowBackground">#0B0C10</item>
-    </style>
-</resources>
