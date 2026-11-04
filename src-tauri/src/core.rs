@@ -725,6 +725,20 @@ fn create_xray_config(outbound: Value, port: u16, routing: &Value) -> Result<Val
                 stream["network"] = json!("grpc");
                 stream["grpcSettings"] = json!({"serviceName":transport.get("service_name").and_then(Value::as_str).unwrap_or("")});
             },
+            "xhttp" | "splithttp" => {
+                stream["network"] = json!("xhttp");
+                stream["xhttpSettings"] = json!({
+                    "path": transport.get("path").and_then(Value::as_str).unwrap_or("/"),
+                    "host": transport.get("headers").and_then(|h| h.get("Host")).and_then(Value::as_str).unwrap_or("")
+                });
+            },
+            "httpupgrade" => {
+                stream["network"] = json!("httpupgrade");
+                stream["httpupgradeSettings"] = json!({
+                    "path": transport.get("path").and_then(Value::as_str).unwrap_or("/"),
+                    "host": transport.get("headers").and_then(|h| h.get("Host")).and_then(Value::as_str).unwrap_or("")
+                });
+            },
             "tcp" => {},
             other => return Err(format!("Xray-адаптер пока не поддерживает транспорт {other}")),
         }

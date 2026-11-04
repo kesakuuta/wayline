@@ -1,4 +1,5 @@
 import type { Server } from './types';
+import { decodeSubscriptionTitle } from './encoding';
 
 export type ImportedServer = Server & { outbound: Record<string, unknown> };
 type AnyJson = Record<string, unknown>;
@@ -16,7 +17,15 @@ const decodeB64 = (input: string) => {
   const bytes = Uint8Array.from(atob(data.padEnd(Math.ceil(data.length / 4) * 4, '=')), c => c.charCodeAt(0));
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 };
-const decodeName = (fragment: string) => { try { return decodeURIComponent(fragment.replace(/^#/, '')); } catch { return fragment.replace(/^#/, ''); } };
+const decodeName = (fragment: string) => {
+  try {
+    const raw = decodeURIComponent(fragment.replace(/^#/, ''));
+    return decodeSubscriptionTitle(raw) || raw;
+  } catch {
+    const raw = fragment.replace(/^#/, '');
+    return decodeSubscriptionTitle(raw) || raw;
+  }
+};
 const truth = (v: string | null) => v === '1' || v === 'true';
 
 function tlsParams(p: URLSearchParams, enable = false): AnyJson | undefined {
@@ -39,9 +48,9 @@ function tlsParams(p: URLSearchParams, enable = false): AnyJson | undefined {
 }
 
 function transport(p: URLSearchParams): AnyJson | undefined {
-  const type = p.get('type') || 'tcp';
-  if (type === 'tcp' || type === 'none') return undefined;
-  if (type === 'ws') {
+  const type = (p.get('type') || p.get('net') || p.get('network') || 'tcp').toLowerCase();
+  if (type === 'tcp' || type === 'none' || type === 'raw') return undefined;
+  if (type === 'ws' || type === 'websocket') {
     const headers: AnyJson = {};
     if (p.get('host')) headers.Host = p.get('host');
     const ws: AnyJson = { type: 'ws', path: p.get('path') || '/' };
@@ -50,8 +59,11 @@ function transport(p: URLSearchParams): AnyJson | undefined {
   }
   if (type === 'grpc') return { type: 'grpc', service_name: p.get('serviceName') || p.get('service_name') || '' };
   if (type === 'httpupgrade') return { type: 'httpupgrade', path: p.get('path') || '/', host: p.get('host') || '' };
-  if (type === 'http') return { type: 'http', path: p.get('path') || '/', host: p.get('host') ? [p.get('host')] : [] };
-  throw new Error(`Транспорт ${type} пока не поддерживается импортом`);
+  if (type === 'http' || type === 'h2') return { type: 'http', path: p.get('path') || '/', host: p.get('host') ? [p.get('host')] : [] };
+  if (type === 'xhttp' || type === 'splithttp') {
+    return { type: 'xhttp', path: p.get('path') || '/', host: p.get('host') || '', mode: p.get('mode') || 'auto' };
+  }
+  return { type, path: p.get('path') || '/', host: p.get('host') || '' };
 }
 
 const countryNames: Record<string, string[]> = {
@@ -119,14 +131,14 @@ function asServer(outbound: AnyJson, name: string): ImportedServer {
   const port = positivePort(outbound.server_port);
   const type = string(outbound.type);
   if (!['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2', 'tuic', 'anytls', 'socks', 'http'].includes(type)) throw new Error(`Протокол ${type} пока не поддерживается`);
-  const secret = type === 'vless' || type === 'vmess' ? string(outbound.uuid) : type === 'shadowsocks' || type === 'trojan' || type === 'hysteria2' ? string(outbound.password) : 'provided';
+  const secret = type === 'vless' || type === 'vmess' ? string(outbound.uuid) : type === 'shadowsocks' || type === 'trojan' || type === 'hysteria2' || type === 'tuic' ? string(outbound.password) : 'provided';
   if (!secret) throw new Error(`Отсутствуют учётные данные: ${type}`);
-  const label = name || `${type.toUpperCase()} · ${display(host)}`;
+  const label = decodeSubscriptionTitle(name) || `${type.toUpperCase()} · ${display(host)}`;
   const outboundCopy = { ...outbound };
   delete outboundCopy.tag;
   return {
-    id: crypto.randomUUID(), name: label, region: host, flag: inferCountryFlag(name, host),
-    protocol: type === 'hysteria2' ? 'Hysteria2' : type.toUpperCase(),
+    id: crypto.randomUUID(), name: label, region: host, flag: inferCountryFlag(label, host),
+    protocol: type === 'hysteria2' ? 'Hysteria2' : type === 'tuic' ? 'TUIC' : type.toUpperCase(),
     transport: `${isObject(outbound.tls) && outbound.tls.reality ? 'REALITY' : outbound.tls ? 'TLS' : 'TCP'} · ${port}`,
     outbound: outboundCopy,
   };
@@ -160,12 +172,15 @@ export function parseShareLink(raw: string): ImportedServer {
       return asServer({ type: 'shadowsocks', server: match[3], server_port: positivePort(match[4]), method: match[1], password: match[2] }, decodeName(uri.includes('#') ? uri.slice(uri.indexOf('#')) : ''));
     }
   }
-  const u = new URL(uri);
+
+  // Normalize potential multi-port / port hopping (e.g. host:443,10000-20000) for URL parser
+  const normalizedUri = uri.replace(/(:\d+)(?:,\d+)*(?:-\d+)*/, '$1');
+  const u = new URL(normalizedUri);
   const kind = u.protocol.slice(0, -1).toLowerCase();
   const name = decodeName(u.hash);
   const p = u.searchParams;
   const host = u.hostname;
-  const port = positivePort(u.port || (kind === 'hysteria2' || kind === 'hy2' ? 443 : 0));
+  const port = positivePort(u.port || (kind === 'hysteria2' || kind === 'hy2' || kind === 'tuic' ? 443 : 0));
   let out: AnyJson;
   if (kind === 'vless') {
     out = { type: 'vless', server: host, server_port: port, uuid: decodeURIComponent(u.username) };
@@ -176,16 +191,28 @@ export function parseShareLink(raw: string): ImportedServer {
     out = { type: 'trojan', server: host, server_port: port, password: decodeURIComponent(u.username), tls: tlsParams(p, true) };
     const t = transport(p); if (t) out.transport = t;
   } else if (kind === 'hysteria2' || kind === 'hy2') {
-    out = { type: 'hysteria2', server: host, server_port: port, password: decodeURIComponent(u.username), tls: tlsParams(p, true) };
+    const password = decodeURIComponent(u.password || u.username || p.get('auth') || '');
+    const sni = p.get('sni') || p.get('peer') || host;
+    const tls: AnyJson = { enabled: true, server_name: sni };
+    if (truth(p.get('insecure')) || truth(p.get('allowInsecure'))) tls.insecure = true;
+    const alpn = p.get('alpn');
+    tls.alpn = alpn ? alpn.split(',').filter(Boolean) : ['h3'];
+    const fingerprint = p.get('fp') || p.get('fingerprint');
+    if (fingerprint && fingerprint !== 'none') tls.utls = { enabled: true, fingerprint };
+    out = { type: 'hysteria2', server: host, server_port: port, password, tls };
     const obfs = p.get('obfs');
     if (obfs) {
-      if (obfs !== 'salamander') throw new Error(`HY2 obfs ${obfs} не поддерживается`);
-      out.obfs = { type: obfs, password: p.get('obfs-password') || '' };
+      out.obfs = { type: obfs, password: p.get('obfs-password') || p.get('obfs_password') || '' };
     }
-    if (p.get('upmbps')) out.up_mbps = Number(p.get('upmbps'));
-    if (p.get('downmbps')) out.down_mbps = Number(p.get('downmbps'));
+    if (p.get('upmbps') || p.get('up_mbps')) out.up_mbps = Number(p.get('upmbps') || p.get('up_mbps'));
+    if (p.get('downmbps') || p.get('down_mbps')) out.down_mbps = Number(p.get('downmbps') || p.get('down_mbps'));
+  } else if (kind === 'tuic' || kind === 'tuic5') {
+    const uuid = decodeURIComponent(u.username || '');
+    const password = decodeURIComponent(u.password || '');
+    const sni = p.get('sni') || host;
+    const tls: AnyJson = { enabled: true, server_name: sni, alpn: p.get('alpn')?.split(',') || ['h3'] };
+    out = { type: 'tuic', server: host, server_port: port, uuid, password, tls, congestion_control: p.get('congestion_control') || 'bbr' };
   } else if (kind === 'ss') {
-    // SIP002: ss://BASE64(method:password)@host:port or ss://BASE64(method:password@host:port)
     if (u.username) {
       const creds = decodeURIComponent(u.username).includes(':') ? decodeURIComponent(u.username) : decodeB64(u.username);
       const pivot = creds.indexOf(':');
