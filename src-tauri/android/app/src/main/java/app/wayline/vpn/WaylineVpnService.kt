@@ -42,17 +42,55 @@ class WaylineVpnService : VpnService() {
                         inbound.remove("inet6_route_address")
                         inbound.remove("inet4_route_exclude_address")
                         inbound.remove("inet6_route_exclude_address")
+                        inbound.remove("sniff")
+                        inbound.remove("sniff_override_destination")
+                        inbound.remove("domain_strategy")
+                        inbound.remove("endpoint_independent_nat")
 
+                        if (!inbound.has("interface_name")) inbound.put("interface_name", "tun0")
                         if (!inbound.has("address")) {
                             val addrs = org.json.JSONArray()
                             if (v4 != null) addrs.put(v4) else addrs.put("172.19.0.1/30")
                             if (v6 != null) addrs.put(v6) else addrs.put("fdfe:dcba:9876::1/126")
                             inbound.put("address", addrs)
                         }
-                        if (!inbound.has("auto_route")) inbound.put("auto_route", true)
-                        if (!inbound.has("strict_route")) inbound.put("strict_route", true)
+                        inbound.put("auto_route", true)
+                        inbound.put("strict_route", true)
+                        inbound.put("stack", "system")
                     }
                 }
+            }
+            var route = root.optJSONObject("route")
+            if (route == null) {
+                route = org.json.JSONObject()
+                root.put("route", route)
+            }
+            route.put("auto_detect_interface", true)
+            var rules = route.optJSONArray("rules")
+            if (rules == null) {
+                rules = org.json.JSONArray()
+                route.put("rules", rules)
+            }
+            var hasSniff = false
+            for (i in 0 until rules.length()) {
+                val r = rules.optJSONObject(i)
+                if (r?.optString("action") == "sniff") {
+                    hasSniff = true
+                    if (i != 0) {
+                        rules.remove(i)
+                        val newRules = org.json.JSONArray()
+                        newRules.put(r)
+                        for (j in 0 until rules.length()) newRules.put(rules.get(j))
+                        route.put("rules", newRules)
+                    }
+                    break
+                }
+            }
+            if (!hasSniff) {
+                val newRules = org.json.JSONArray()
+                newRules.put(org.json.JSONObject().put("action", "sniff"))
+                for (j in 0 until rules.length()) newRules.put(rules.get(j))
+                route.put("rules", newRules)
             }
             root.toString()
         } catch (_: Throwable) {

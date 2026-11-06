@@ -56,12 +56,11 @@ export async function connect(
       ? [{
           type: 'tun',
           tag: 'tun-in',
+          interface_name: 'tun0',
           address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
           auto_route: true,
           strict_route: true,
-          endpoint_independent_nat: true,
-          stack: 'mixed',
-          sniff: true
+          stack: 'system'
         }]
       : [{
           type: 'mixed',
